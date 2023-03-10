@@ -183,7 +183,7 @@ def main():
     
     # #00FFFF : temporary
     result_groups = {
-        'Train' : SceneTextDataModule.TEST_VAL
+        'Train' : SceneTextDataModule.TEST_TRAIN
     }
     
     log_tag = ''

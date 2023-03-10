@@ -31,7 +31,7 @@ class SceneTextDataModule(pl.LightningDataModule):
     TEST_ALL = tuple(set(TEST_BENCHMARK_SUB + TEST_BENCHMARK + TEST_NEW))
     TEST_VAL = ('IC13', 'IC15', 'IIIT5k', 'SVT')
     # TEST_TRAIN = ('ArT', 'COCOv1.4', 'LSVT', 'MLT19', 'OpenVINO', 'RCTW17', 'ReCTS', 'TextOCR', 'Uber')
-    TEST_TRAIN = ('TRAIN')
+    TEST_TRAIN = ('TRAIN',)
 
     def __init__(self, root_dir: str, train_dir: str, img_size: Sequence[int], max_label_length: int,
                  charset_train: str, charset_test: str, batch_size: int, num_workers: int, augment: bool,
@@ -131,7 +131,7 @@ class SceneTextDataModule(pl.LightningDataModule):
         #                            transform=transform, debug=self.debug) for s in subset}
         datasets = build_tree_dataset(root, self.charset_test, self.max_label_length,
                                       self.min_image_dim, self.remove_whitespace, self.normalize_unicode,
-                                      transform=transform)
+                                      transform=transform, debug=self.debug)
         # return {k: DataLoader(v, batch_size=self.batch_size, num_workers=self.num_workers,
         #                       pin_memory=True, collate_fn=self.collate_fn)
         #         for k, v in datasets.items()}
