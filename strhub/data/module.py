@@ -129,7 +129,7 @@ class SceneTextDataModule(pl.LightningDataModule):
         # datasets = {s: LmdbDataset(str(root / s), self.charset_test, self.max_label_length,
         #                            self.min_image_dim, self.remove_whitespace, self.normalize_unicode,
         #                            transform=transform, debug=self.debug) for s in subset}
-        datasets = build_tree_dataset(root, self.charset_test, self.max_label_length,
+        datasets = build_tree_dataset(root, self.charset_train, self.max_label_length,
                                       self.min_image_dim, self.remove_whitespace, self.normalize_unicode,
                                       transform=transform, debug=self.debug)
         # return {k: DataLoader(v, batch_size=self.batch_size, num_workers=self.num_workers,

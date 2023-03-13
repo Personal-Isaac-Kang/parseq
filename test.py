@@ -164,7 +164,8 @@ def main():
         mean_conf = 100 * confidence / total
         mean_label_length = label_length / total
         results[dname] = Result(dname, total, accuracy, mean_ned, mean_conf, mean_label_length)
-        if args.debug:
+        # if args.debug:
+        if True:
             init_dir(f'{debug_dir}/texts/{dname}')
             with open(f'{debug_dir}/texts/{dname}/results.txt', 'w') as f:
                 f.write(f'{"pred_inter":26s}{"pred":26s}{"gt":26s}{"refined":10s}{"correct":10s}\n')
