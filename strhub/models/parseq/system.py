@@ -61,6 +61,7 @@ class PARSeq(CrossEntropySystem):
                  dec_num_heads: int, dec_mlp_ratio: int, dec_depth: int,
                  perm_num: int, perm_forward: bool, perm_mirrored: bool,
                  decode_ar: bool, refine_iters: int, dropout: float,
+                 head_char_emb_tying: bool,
                  debug: bool = False, **kwargs: Any) -> None:
         self.debug = debug
         super().__init__(charset_train, charset_test, batch_size, lr, warmup_pct, weight_decay, self.debug)
@@ -82,9 +83,12 @@ class PARSeq(CrossEntropySystem):
         self.perm_forward = perm_forward
         self.perm_mirrored = perm_mirrored
 
-        # We don't predict <bos> nor <pad>
-        self.head = nn.Linear(embed_dim, len(self.tokenizer) - 2)
+        # # We don't predict <bos> nor <pad>
+        # self.head = nn.Linear(embed_dim, len(self.tokenizer) - 2)
+        self.head = nn.Linear(embed_dim, len(self.tokenizer))
         self.text_embed = TokenEmbedding(len(self.tokenizer), embed_dim)
+        if head_char_emb_tying:
+            self.head.weight = self.text_embed.embedding.weight
 
         # +1 for <eos>
         self.pos_queries = nn.Parameter(torch.Tensor(1, max_label_length + 1, embed_dim))
