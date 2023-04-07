@@ -126,11 +126,12 @@ class DecoderLayer(nn.Module):
 class Decoder(nn.Module):
     __constants__ = ['norm']
 
-    def __init__(self, decoder_layer, num_layers, norm):
+    def __init__(self, decoder_layer, num_layers, norm, update_content):
         super().__init__()
         self.layers = transformer._get_clones(decoder_layer, num_layers)
         self.num_layers = num_layers
         self.norm = norm
+        self.update_content = update_content
 
     def forward(self, query, content, memory, query_mask: Optional[Tensor] = None, content_mask: Optional[Tensor] = None,
                 content_key_padding_mask: Optional[Tensor] = None):
@@ -144,7 +145,7 @@ class Decoder(nn.Module):
         for i, mod in enumerate(self.layers):
             last = i == len(self.layers) - 1
             query, content, agg = mod(query, content, memory, query_mask, content_mask, content_key_padding_mask,
-                                 update_content=not last)
+                                 update_content=not last and self.update_content)
             aggs.append(agg)
         query = self.norm(query)
         return query, aggs

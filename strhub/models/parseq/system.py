@@ -61,7 +61,7 @@ class PARSeq(CrossEntropySystem):
                  dec_num_heads: int, dec_mlp_ratio: int, dec_depth: int,
                  perm_num: int, perm_forward: bool, perm_mirrored: bool,
                  decode_ar: bool, refine_iters: int, dropout: float,
-                 head_char_emb_tying: bool,
+                 head_char_emb_tying: bool, update_content: bool,
                  debug: bool = False, **kwargs: Any) -> None:
         self.debug = debug
         super().__init__(charset_train, charset_test, batch_size, lr, warmup_pct, weight_decay, self.debug)
@@ -75,7 +75,7 @@ class PARSeq(CrossEntropySystem):
         self.encoder = Encoder(img_size, patch_size, embed_dim=embed_dim, depth=enc_depth, num_heads=enc_num_heads,
                                mlp_ratio=enc_mlp_ratio)
         decoder_layer = DecoderLayer(embed_dim, dec_num_heads, embed_dim * dec_mlp_ratio, dropout)
-        self.decoder = Decoder(decoder_layer, num_layers=dec_depth, norm=nn.LayerNorm(embed_dim))
+        self.decoder = Decoder(decoder_layer, num_layers=dec_depth, norm=nn.LayerNorm(embed_dim), update_content=update_content)
 
         # Perm/attn mask stuff
         self.rng = np.random.default_rng()
