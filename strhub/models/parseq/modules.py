@@ -82,7 +82,7 @@ class DecoderLayer(nn.Module):
         
         if debug: agg.content = tgt_kv
         
-        # S -> P
+        # O -> L
         if debug : agg.main_pt_1 = tgt
         tgt2, sa_weights = self.self_attn(tgt_norm, tgt_kv, tgt_kv, attn_mask=tgt_mask,
                                           key_padding_mask=tgt_key_padding_mask)
@@ -91,7 +91,7 @@ class DecoderLayer(nn.Module):
         tgt = tgt + self.dropout1(tgt2)
         if debug : agg.main_pt_2 = tgt
 
-        # V -> P
+        # O -> V
         tgt2, ca_weights = self.cross_attn(self.norm1(tgt), memory, memory)
         if debug : agg.res_pt_2 = tgt2
         if debug : agg.ca_weights = ca_weights

@@ -321,7 +321,8 @@ class PARSeq(CrossEntropySystem):
         tgt_in = tgt[:, :-1]
         tgt_out = tgt[:, 1:]
         # The [EOS] token is not depended upon by any other token in any permutation ordering
-        tgt_padding_mask = (tgt_in == self.pad_id) | (tgt_in == self.eos_id)
+        # tgt_padding_mask = (tgt_in == self.pad_id) | (tgt_in == self.eos_id)
+        tgt_padding_mask = (tgt_in == self.pad_id)
 
         loss = 0
         loss_numel = 0
@@ -334,9 +335,9 @@ class PARSeq(CrossEntropySystem):
             loss_numel += n
             # After the second iteration (i.e. done with canonical and reverse orderings),
             # remove the [EOS] tokens for the succeeding perms
-            if i == 1:
-                tgt_out = torch.where(tgt_out == self.eos_id, self.pad_id, tgt_out)
-                n = (tgt_out != self.pad_id).sum().item()
+            # if i == 1:
+            #     tgt_out = torch.where(tgt_out == self.eos_id, self.pad_id, tgt_out)
+            #     n = (tgt_out != self.pad_id).sum().item()
         loss /= loss_numel
 
         self.log('loss', loss)

@@ -95,7 +95,7 @@ class BaseTokenizer(ABC):
             probs, ids = dist.max(-1)  # greedy selection
             if not raw:
                 probs, ids = self._truncate(probs, ids)
-            tokens = self._ids2tok(ids, not raw)
+            tokens = self._ids2tok(ids, join=not raw)
             batch_tokens.append(tokens)
             batch_probs.append(probs)
         return batch_tokens, batch_probs
@@ -145,7 +145,8 @@ class Tokenizer(BaseTokenizer):
             probs, ids = dist.max(-1)  # greedy selection
             probs, ids = self._truncate(probs, ids)
             if greedy:
-                tokens = self._ids2tok(ids, True)
+                eos_idx = min((len(ids), max_label_length))
+                tokens = self._ids2tok(ids[:eos_idx], join=False)
                 batch_tokens.append(tokens)
             else:
                 eos_idx = min((len(ids), max_label_length))
@@ -157,7 +158,7 @@ class Tokenizer(BaseTokenizer):
                 m = Categorical(dist_temp)
                 sampled_ids = m.sample()[:eos_idx]
                 sampled_ids += len(self.specials_first)
-                tokens = self._ids2tok(sampled_ids, True)
+                tokens = self._ids2tok(sampled_ids, join=False)
                 batch_tokens.append(tokens)
         #- encode
         seq = self.encode(batch_tokens, device=device)
