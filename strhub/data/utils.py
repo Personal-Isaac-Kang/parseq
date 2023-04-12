@@ -138,6 +138,18 @@ class Tokenizer(BaseTokenizer):
         return probs, ids
     
     def sample(self, b_logits: Tensor, greedy=False, temp=1.0, max_label_length=25, pad_to_max_length=True, device=None):
+        """Sample a sequence from logits.
+
+        Args:
+            b_logits: Character logits. Shape N x S x K
+            greedy : Greedy sampling. Defaults to False.
+            temp : When not greedy sampling, sample from character probability distribution with this temperature. Defaults to 1.0.
+            max_label_length : Maximum label length, excluding special chars. Defaults to 25.
+            pad_to_max_length : Pad sequence to max length, which is max_label_length + 2 ([B], [E]). Defaults to True.
+
+        Returns:
+            Tensor of token ids. Shape N x S'
+        """
         batch_tokens = []
         for logits in b_logits:
             #- get eos positions
@@ -162,7 +174,6 @@ class Tokenizer(BaseTokenizer):
                 batch_tokens.append(tokens)
         #- encode
         seq = self.encode(batch_tokens, device=device)
-        seq = seq[:, :-1] # remove eos
         if pad_to_max_length:
-            seq = F.pad(seq, (0, max_label_length + 1 - seq.shape[1]), "constant", self.pad_id)
+            seq = F.pad(seq, (0, max_label_length + 2 - seq.shape[1]), "constant", self.pad_id)
         return seq

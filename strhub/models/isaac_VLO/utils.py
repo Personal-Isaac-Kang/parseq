@@ -19,7 +19,8 @@ class AttentionMask:
                 - full attention between visual, langauge and ordinal tokens is applied.
         """
         L_V = int(img_size[0] * img_size[1] / (patch_size[0] * patch_size[1]))
-        L_L = L_O = self.max_label_length + 1 # +1 for eos
+        L_L = self.max_label_length + 2 # + 2 for [B] [E]
+        L_O = self.max_label_length + 1 # +1 [E]
         L_T = L_V + L_L + L_O
         def full_attn(h, w=None):
             w = w if w is not None else h
@@ -133,7 +134,8 @@ class AttentionMask:
         import matplotlib.patches as patches
         vis_size = [a // b for (a, b) in zip(self.hparams.img_size, self.hparams.patch_size)]
         L_V = vis_size[0] * vis_size[1]
-        L_L = L_O = self.max_label_length + 1
+        L_L = self.max_label_length + 2
+        L_O = self.max_label_length + 1
         L_T = L_V + L_L + L_O
         win = attn_mask.shape[0]
         df = pd.DataFrame(torch.where(attn_mask == 0, 1, 0).numpy()[-win:, -win:], index=list(range(win)), columns=list(range(win)))

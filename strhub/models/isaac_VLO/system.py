@@ -209,8 +209,8 @@ class Isaac_VLO(CrossEntropySystem):
         
         testing = not validation
         bs = images.shape[0]
-        num_steps = self.max_label_length + 1 # +1 for eos
-        L_L = L_O = num_steps = self.max_label_length + 1 # +1 for eos
+        L_L = self.max_label_length + 2 # +2 for [B], [E]
+        L_O = num_steps = self.max_label_length + 1 # +1 for [E]
         
         #@ decoder
         #* prepare tokens
@@ -255,18 +255,22 @@ class Isaac_VLO(CrossEntropySystem):
         
         #@ refiner
         if self.refiner is not None and self.ref_iters > 0:
+            #* sample sequence from decoder
             ids_sampled = self.tokenizer.sample(logits_dec, greedy=True, temp=1.0, pad_to_max_length=False, device=self._device)
-            assert ids_sampled.shape[1] <= L_L
-            padding_mask_L = (ids_sampled == self.eos_id) | (ids_sampled == self.pad_id)
-            padding_mask_VLO = F.pad(padding_mask_L, (L_V, L_O + 1), "constant", 0) # +1 for dummy token
+            #* prepare tokens
             lan_ref_in = self.to_lan(ids_sampled, 'refiner')
+            ord_ref_in = self.pos_embed_ref_O[:, :L_O].expand(bs, -1, -1)
+            ord_ref_in = ord_ref_in + self.modal_embed[:, 2]
+            #* padding mask
+            padding_mask_L = ids_sampled == self.pad_id
+            padding_mask_VLO = F.pad(padding_mask_L, (L_V, L_O + 1), "constant", 0) # +1 for dummy token
             #* attention mask
             attn_mask_refine = self.attn_mask_refine.to(self._device)
             select_indices = torch.arange(L_V).tolist() + (L_V + torch.arange(ids_sampled.shape[1])).tolist()\
                 +  (L_V +  L_L + torch.arange(L_O)).tolist() + [L_V + L_L + L_O]
             attn_mask_refine_t = attn_mask_refine[select_indices][:, select_indices]
             #* refine
-            vis_ref_out, lan_ref_out, ord_ref_out, agg_ref = self.refine(vis, lan_ref_in, ord_dec_in, dummy_token, attn_mask_refine_t, padding_mask_VLO, debug=debug)
+            vis_ref_out, lan_ref_out, ord_ref_out, agg_ref = self.refine(vis, lan_ref_in, ord_ref_in, dummy_token, attn_mask_refine_t, padding_mask_VLO, debug=debug)
             logits_ref = self.char_head_ref(ord_ref_out)
             logits = logits_ref
             
@@ -285,10 +289,10 @@ class Isaac_VLO(CrossEntropySystem):
         - Validation loss computation
         """
         logits, logits_inter, _ = self.forward(images, validation=True)
-        tokens = self.tokenizer.encode(labels, self.device)
-        tgt_out = tokens[:, 1:]  # Discard <bos>
-        L_L = self.max_label_length + 1 # +1 for <eos>
-        tgt_out = F.pad(tgt_out, (0, L_L - tgt_out.shape[1]), "constant", self.pad_id)
+        ids = self.tokenizer.encode(labels, self.device)
+        tgt_out = ids[:, 1:]  # Discard [B]
+        L_O = self.max_label_length + 1 # +1 for [E]
+        tgt_out = F.pad(tgt_out, (0, L_O - tgt_out.shape[1]), "constant", self.pad_id)
         loss = nn.CrossEntropyLoss(ignore_index=self.pad_id)(logits.moveaxis(-1, 1), tgt_out)
         loss_inter = nn.CrossEntropyLoss(ignore_index=self.pad_id)(logits_inter.moveaxis(-1, 1), tgt_out)
         loss_numel = (tgt_out != self.pad_id).sum()
@@ -312,7 +316,8 @@ class Isaac_VLO(CrossEntropySystem):
         #@ decoding stage.
         #* lan tokens
         ids = self.tokenizer.encode(labels, self._device)
-        L_L = L_O = self.max_label_length + 1 # +1 for <eos>
+        L_L = self.max_label_length + 2 # +2 for [B], [E]
+        L_O = self.max_label_length + 1 # +1 for [E]
         tgt_in = ids[:, :-1]
         tgt_out = ids[:, 1:]
         #* ord tokens
@@ -320,8 +325,7 @@ class Isaac_VLO(CrossEntropySystem):
         ord_dec_in = ord_dec_in + self.modal_embed[:, 2]
         ord_dec_in = ord_dec_in[:, :tgt_out.shape[1]]
         #* padding mask
-        # padding mask : pad + eos posiitons
-        padding_mask = (tgt_in == self.pad_id) | (tgt_in == self.eos_id)
+        padding_mask = tgt_in == self.pad_id
         padding_mask = F.pad(padding_mask, (L_V, ord_dec_in.shape[1] + 1), "constant", 0) # +1 for dummy token
         lan_dec_in = self.to_lan(tgt_in, 'decoder')
         #* dummy token
@@ -346,33 +350,45 @@ class Isaac_VLO(CrossEntropySystem):
         
         #@ refinement stage.
         if self.refiner is not None:
-            #* lan tokens
+            #* sample sequence from decoder
             ids_sampled = self.tokenizer.sample(logits_dec, greedy=self.dec_sampling_method == 'identity', temp=self.dec_sampling_temp, pad_to_max_length=False, device=self._device)
-            padding_mask_L = (ids_sampled == self.eos_id) | (ids_sampled == self.pad_id)
-            padding_mask_VLO = F.pad(padding_mask_L, (L_V, tgt_out.shape[1] + 1), "constant", 0) # +1 for dummy token
+            ids_len = ids.shape[1]
+            ids_sampled_len = ids_sampled.shape[1]
+            L_S = max(ids_len, ids_sampled_len)
+            if ids_len < L_S:
+                ids = F.pad(ids, (0, L_S - ids_len), "constant", self.pad_id)
+            if ids_sampled_len < L_S:
+                ids_sampled = F.pad(ids_sampled, (0, L_S - ids_sampled_len), "constant", self.pad_id)
+            assert ids.shape[1] == L_S and ids_sampled.shape[1] == L_S
+            #* prepare tokens
+            lan_ref_in = self.to_lan(ids_sampled, 'refiner')
+            ord_ref_in = self.pos_embed_ref_O[:, :L_S - 1].expand(bs, -1, -1)
+            ord_ref_in = ord_ref_in + self.modal_embed[:, 2]
+            #* padding mask
+            padding_mask_L = ids_sampled == self.pad_id
+            padding_mask_VLO = F.pad(padding_mask_L, (L_V, L_S), "constant", 0) # including dummy token
             #- mask visual tokens with probability
             if torch.rand(1).item() < self.ref_vis_masking_prob:
                 padding_mask_VLO[:, :L_V] = 1
-            lan_ref_in = self.to_lan(ids_sampled, 'refiner')
             #* attention mask
             attn_mask_refine = self.attn_mask_refine.to(self._device)
-            select_indices = torch.arange(L_V).tolist() + (L_V + torch.arange(ids_sampled.shape[1])).tolist()\
-                + (L_V + L_L + torch.arange(tgt_out.shape[1])).tolist() + [L_V + L_L + L_O]
+            select_indices = torch.arange(L_V).tolist() + (L_V + torch.arange(L_S)).tolist()\
+                + (L_V + L_L + torch.arange(L_S - 1)).tolist() + [L_V + L_L + L_O]
             attn_mask_refine_t = attn_mask_refine[select_indices][:, select_indices]
             #* refiner
-            vis_ref_out, lan_ref_out, ord_ref_out, agg_ref = self.refine(vis, lan_ref_in, ord_dec_in, dummy_token, attn_mask_refine_t, padding_mask_VLO)
+            vis_ref_out, lan_ref_out, ord_ref_out, agg_ref = self.refine(vis, lan_ref_in, ord_ref_in, dummy_token, attn_mask_refine_t, padding_mask_VLO)
             #- loss
-            # Language Modeling
+            #* Language Modeling
             logits_ref_char = self.char_head_ref(ord_ref_out)
+            tgt_out = ids[:, 1:]
             loss_ref_char = nn.CrossEntropyLoss(ignore_index=self.pad_id)(logits_ref_char.moveaxis(-1, 1), tgt_out)
-            # Replaced Token Detection
-            logits_ref_rtd = self.rtd_head_ref(lan_ref_out)
-            padding_mask_rtd = tgt_in == self.pad_id
-            import ipdb; ipdb.set_trace(context=11) # #FF0000
-            rtd_tgt = (tgt_in != ids_sampled).float()
-            loss_ref_rtd = nn.BCEWithLogitsLoss(reduction='none')(logits_ref_rtd.squeeze().float(), rtd_tgt)
-            loss_ref_rtd = (~padding_mask_rtd * loss_ref_rtd).sum() / (~padding_mask_rtd).sum()
+            #* Replaced Token Detection
+            logits_ref_rtd = self.rtd_head_ref(ord_ref_out)
+            rtd_tgt = (ids_sampled[:, 1:] == tgt_out).float()
+            loss_ref_rtd = nn.BCEWithLogitsLoss()(logits_ref_rtd.squeeze().float(), rtd_tgt)
+            #* refiner loss
             loss_ref = self.ref_char_loss_scale * loss_ref_char + self.ref_rtd_loss_scale * loss_ref_rtd
+            #* total loss
             loss = loss_dec + loss_ref
             #- accuracy
             probs_ref = logits_ref_char.softmax(-1)
