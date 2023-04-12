@@ -259,7 +259,8 @@ class Isaac_VLO(CrossEntropySystem):
             ids_sampled = self.tokenizer.sample(logits_dec, greedy=True, temp=1.0, pad_to_max_length=False, device=self._device)
             #* prepare tokens
             lan_ref_in = self.to_lan(ids_sampled, 'refiner')
-            ord_ref_in = self.pos_embed_ref_O[:, :L_O].expand(bs, -1, -1)
+            L_S = min(ids_sampled.shape[1] + 5, self.max_label_length + 1)
+            ord_ref_in = self.pos_embed_ref_O[:, :L_S].expand(bs, -1, -1)
             ord_ref_in = ord_ref_in + self.modal_embed[:, 2]
             #* padding mask
             padding_mask_L = ids_sampled == self.pad_id
