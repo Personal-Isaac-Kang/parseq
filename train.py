@@ -43,9 +43,7 @@ def main(config: DictConfig):
         else:
             num_gpus = len(gpus)
         if num_gpus > 1:
-            # Use DDP
             config.trainer.strategy = 'ddp'
-            # DDP optimizations
             trainer_strategy = DDPStrategy(find_unused_parameters=True, gradient_as_bucket_view=True)
             # Scale steps-based config
             config.trainer.val_check_interval //= num_gpus
@@ -66,8 +64,7 @@ def main(config: DictConfig):
     checkpoint = ModelCheckpoint(monitor='val_accuracy', mode='max', save_top_k=3, save_last=True,
                                  filename='{epoch}-{step}-{val_accuracy:.4f}')
     swa = StochasticWeightAveraging(swa_epoch_start=0.75)
-    cwd = HydraConfig.get().runtime.output_dir if config.ckpt_path is None else \
-        str(Path(config.ckpt_path).parents[1].absolute())
+    cwd = HydraConfig.get().runtime.output_dir if config.ckpt_path is None else str(Path(config.ckpt_path).parents[1].absolute())
     lr_monitor = LearningRateMonitor()
     print(f'checkpoint directory : {cwd}')
     trainer: Trainer = hydra.utils.instantiate(config.trainer, logger=TensorBoardLogger(cwd, '', '.'),
