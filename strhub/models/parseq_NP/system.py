@@ -295,7 +295,7 @@ class PARSeq_NP(CrossEntropySystem):
         query_mask = mask[1:, :-1]
         return content_mask, query_mask
     
-    def forward_logits_loss(self, images: Tensor, labels: List[str]) -> Tuple[Tensor, Tensor, int]:
+    def forward_logits_loss(self, images, labels):
         targets = self.tokenizer.encode(labels, self.device)
         targets = targets[:, 1:]  # Discard <bos>
         max_len = targets.shape[1] - 1  # exclude <eos> from count
