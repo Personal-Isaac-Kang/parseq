@@ -1,5 +1,5 @@
 name: parseq_PD
-_target_: strhub.models.parseq_parallel_decoding.system.PARSeq_PD
+_target_: strhub.models.parseq_PD.system.PARSeq_PD
 
 # Data
 patch_size: [ 4, 8 ]  # [ height, width ]
