@@ -167,13 +167,6 @@ class PARSeq(CrossEntropySystem):
                     _agg = _aggs[DEBUG_LAYER_INDEX]
                     sa_weights.append(_agg.sa_weights)
                     ca_weights.append(_agg.ca_weights)
-                    main_pt_1.append(_agg.main_pt_1)
-                    main_pt_2.append(_agg.main_pt_2)
-                    main_pt_3.append(_agg.main_pt_3)
-                    main_pt_4.append(_agg.main_pt_4)
-                    res_pt_1.append(_agg.res_pt_1)
-                    res_pt_2.append(_agg.res_pt_2)
-                    res_pt_3.append(_agg.res_pt_3)
     
                 # the next token probability is in the output's ith token position
                 p_i = self.head(tgt_out)
@@ -219,15 +212,6 @@ class PARSeq(CrossEntropySystem):
             # aggregate inspection data
             agg.sa_weights = sa_weights
             agg.ca_weights = ca_weights
-            agg.main_pt_1 = torch.cat(main_pt_1, dim=1)
-            agg.main_pt_2 = torch.cat(main_pt_2, dim=1)
-            agg.main_pt_3 = torch.cat(main_pt_3, dim=1)
-            agg.main_pt_4 = torch.cat(main_pt_4, dim=1)
-            agg.res_pt_1 = torch.cat(res_pt_1, dim=1)
-            agg.res_pt_2 = torch.cat(res_pt_2, dim=1)
-            agg.res_pt_3 = torch.cat(res_pt_3, dim=1)
-            agg.memory = memory
-            agg.content = _agg.content
 
         return logits, logits, agg
 

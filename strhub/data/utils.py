@@ -110,7 +110,6 @@ class Tokenizer(BaseTokenizer):
     def __init__(self, charset: str) -> None:
         self.specials_first = (self.EOS,)
         self.specials_last = (self.BOS, self.PAD)
-        #? why was EOS first, and BOS PAD at the end?
         super().__init__(charset, self.specials_first, self.specials_last)
         self.eos_id, self.bos_id, self.pad_id = [self._stoi[s] for s in self.specials_first + self.specials_last]
 

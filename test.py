@@ -120,10 +120,6 @@ def main():
     if args.new:
         test_set += SceneTextDataModule.TEST_NEW
     test_set = sorted(set(test_set))
-    
-    # # #00FFFF : temporary
-    # test_set = SceneTextDataModule.TEST_TRAIN
-    # test_set = sorted(set(test_set))
 
     results = {}
     pred_gts = {}
@@ -180,11 +176,6 @@ def main():
     }
     if args.new:
         result_groups.update({'New': SceneTextDataModule.TEST_NEW})
-    
-    # # #00FFFF : temporary
-    # result_groups = {
-    #     'Train' : SceneTextDataModule.TEST_VAL
-    # }
     
     log_tag = ''
     for k, v in kwargs.items():

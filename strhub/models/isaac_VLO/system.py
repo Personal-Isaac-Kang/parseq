@@ -54,15 +54,15 @@ class Isaac_VLO(CrossEntropySystem):
                  debug: bool = False, **kwargs: Any) -> None:
         """
         Args:
-            QK : Specifies allowed attention. "VV" stands for self-attention of visual tokens.
-                "OV" stands for ordinal tokens as query and visual tokens as key.
+            QK : Specifies allowed attention. "VV" stands for self-attention of visual embs.
+                "OV" stands for ordinal embs as query and visual embs as key.
                 
                 QK = [query_V_list, query_L_list, query_O_list].
                 query_V_list = [key_V, key_L, key_O]
                 
                 e.g. QK = [['V', 'L'], [], ['O']] means that "VV", "VL', "OO" attention is allowed.
                 
-                Language and ordinal tokens are always causal, including self.
+                Language and ordinal embs are always causal, including self.
         """
         super().__init__(charset_train, charset_test, batch_size, lr, warmup_pct, weight_decay, debug)
         print('Model : Isaac_VLO')
@@ -161,9 +161,9 @@ class Isaac_VLO(CrossEntropySystem):
         Run Decoder.
         
         Args:
-            vis : Visual tokens. Shape: N, L_V, D
-            lan : Language tokens. Shape: N, L_L, D
-            pos : Ordinal tokens. Shape: N, L_O, D
+            vis : Visual embs. Shape: N, L_V, D
+            lan : Language embs. Shape: N, L_L, D
+            pos : Ordinal embs. Shape: N, L_O, D
         """
         lan = self.dropout(lan)
         pos = self.dropout(pos)
@@ -175,13 +175,13 @@ class Isaac_VLO(CrossEntropySystem):
         """
         Used in forward-pass of train.
         Further refines initial decoder prediction.
-        Stop gradient is applied to language and positional tokens,
+        Stop gradient is applied to language and positional embs,
         to prevent information leak from future steps.
         
         Args:
-            vis : Visual tokens. Shape: N, L_V, D
-            lan : Language tokens. Shape: N, L_L, D
-            pos : Ordinal tokens. Shape: N, L_O, D
+            vis : Visual embs. Shape: N, L_V, D
+            lan : Language embs. Shape: N, L_L, D
+            pos : Ordinal embs. Shape: N, L_O, D
         """
         lan = self.dropout(lan)
         pos = self.dropout(pos)
@@ -213,7 +213,7 @@ class Isaac_VLO(CrossEntropySystem):
         L_O = num_steps = self.max_label_length + 1 # +1 for [E]
         
         #@ decoder
-        #* prepare tokens
+        #* prepare embs
         vis = self.encode(images)
         vis = vis + self.modal_embed[:, 0]
         L_V = vis.shape[1]
@@ -257,7 +257,7 @@ class Isaac_VLO(CrossEntropySystem):
         if self.refiner is not None and self.ref_iters > 0:
             #* sample sequence from decoder
             ids_sampled = self.tokenizer.sample(logits_dec, greedy=True, temp=1.0, pad_to_max_length=False, device=self._device)
-            #* prepare tokens
+            #* prepare embs
             lan_ref_in = self.to_lan(ids_sampled, 'refiner')
             L_S = min(ids_sampled.shape[1] + 5, self.max_label_length + 1)
             ord_ref_in = self.pos_embed_ref_O[:, :L_S].expand(bs, -1, -1)
@@ -310,18 +310,18 @@ class Isaac_VLO(CrossEntropySystem):
         images, labels = batch
         bs = images.shape[0]
         
-        #* vis tokens
+        #* vis embs
         vis = self.encode(images)
         vis = vis + self.modal_embed[:, 0]
         L_V = vis.shape[1]
         #@ decoding stage.
-        #* lan tokens
+        #* lan embs
         ids = self.tokenizer.encode(labels, self._device)
         L_L = self.max_label_length + 2 # +2 for [B], [E]
         L_O = self.max_label_length + 1 # +1 for [E]
         tgt_in = ids[:, :-1]
         tgt_out = ids[:, 1:]
-        #* ord tokens
+        #* ord embs
         ord_dec_in = self.pos_embed_dec_O[:, :L_O].expand(bs, -1, -1)
         ord_dec_in = ord_dec_in + self.modal_embed[:, 2]
         ord_dec_in = ord_dec_in[:, :tgt_out.shape[1]]
@@ -361,14 +361,14 @@ class Isaac_VLO(CrossEntropySystem):
             if ids_sampled_len < L_S:
                 ids_sampled = F.pad(ids_sampled, (0, L_S - ids_sampled_len), "constant", self.pad_id)
             assert ids.shape[1] == L_S and ids_sampled.shape[1] == L_S
-            #* prepare tokens
+            #* prepare embs
             lan_ref_in = self.to_lan(ids_sampled, 'refiner')
             ord_ref_in = self.pos_embed_ref_O[:, :L_S - 1].expand(bs, -1, -1)
             ord_ref_in = ord_ref_in + self.modal_embed[:, 2]
             #* padding mask
             padding_mask_L = ids_sampled == self.pad_id
             padding_mask_VLO = F.pad(padding_mask_L, (L_V, L_S), "constant", 0) # including dummy token
-            #- mask visual tokens with probability
+            #- mask visual embs with probability
             if torch.rand(1).item() < self.ref_vis_masking_prob:
                 padding_mask_VLO[:, :L_V] = 1
             #* attention mask
