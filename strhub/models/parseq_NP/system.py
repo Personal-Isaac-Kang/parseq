@@ -204,7 +204,8 @@ class PARSeq_NP(CrossEntropySystem):
             for i in range(self.refine_iters):
                 # Prior context is the previous output.
                 tgt_in = torch.cat([bos, logits[:, :-1].argmax(-1)], dim=1)
-                tgt_padding_mask = ((tgt_in == self.eos_id).cumsum(-1) > 0)  # mask tokens beyond the first EOS token.
+                # tgt_padding_mask = ((tgt_in == self.eos_id).cumsum(-1) > 0)  # mask tokens beyond the first EOS token.
+                tgt_padding_mask = None
                 tgt_out, _ = self.decode(tgt_in, memory, tgt_mask[:tgt_in.shape[1], :tgt_in.shape[1]], tgt_padding_mask,
                                       tgt_query=pos_queries, tgt_query_mask=query_mask[:, :tgt_in.shape[1]])
                 logits = self.head(tgt_out)
@@ -293,6 +294,18 @@ class PARSeq_NP(CrossEntropySystem):
         # query starts from char_first, ends with [E]. key starts from [B], ends with char_last.c
         query_mask = mask[1:, :-1]
         return content_mask, query_mask
+    
+    def forward_logits_loss(self, images: Tensor, labels: List[str]) -> Tuple[Tensor, Tensor, int]:
+        targets = self.tokenizer.encode(labels, self.device)
+        targets = targets[:, 1:]  # Discard <bos>
+        max_len = targets.shape[1] - 1  # exclude <eos> from count
+        logits, _, _ = self.forward(images, max_len)
+        # loss = F.cross_entropy(logits.flatten(end_dim=1), targets.flatten(), ignore_index=self.pad_id)
+        loss = F.cross_entropy(logits.flatten(end_dim=1), targets.flatten())
+        # loss_numel = (targets != self.pad_id).sum()
+        loss_numel = torch.numel(targets)
+        
+        return logits, loss, logits, loss, loss_numel
 
     def training_step(self, batch, batch_idx) -> STEP_OUTPUT:
         images, labels = batch
@@ -308,7 +321,7 @@ class PARSeq_NP(CrossEntropySystem):
         # The [EOS] token is not depended upon by any other token in any permutation ordering
         # tgt_padding_mask = (tgt_in == self.pad_id) | (tgt_in == self.eos_id)
         # tgt_padding_mask = (tgt_in == self.pad_id)
-        tgt_padding_mask = None #FF00FF
+        tgt_padding_mask = None
 
         loss = 0
         loss_numel = 0
