@@ -4,10 +4,9 @@ import torch.nn.functional as F
 
 class ParallelDecoding():
     """Mask related functionalities for Scheduled Parallel Decoding. """
-    def __init__(self, max_iter, num_tokens, batch_size, schedule='cosine'):
+    def __init__(self, max_iter, num_tokens, schedule='cosine'):
         self.T = max_iter
         self.N = num_tokens
-        self.bs = batch_size
         self.mask_schedule = schedule
 
     def mask_scheduling_function(self, r):
@@ -32,9 +31,9 @@ class ParallelDecoding():
         """Get random mask for training"""
         r = torch.rand(1)
         n = self.get_number_of_masked_tokens(r)
-        mask = torch.zeros((self.bs, self.N), dtype=torch.bool)
-        mask[:, :n] = True
-        mask = mask[:, torch.randperm(self.N)]
+        mask = torch.zeros(self.N, dtype=torch.bool)
+        mask[:n] = True
+        mask = mask[torch.randperm(self.N)]
         L_mask = F.pad(mask, [1, 0], "constant", 0)
         O_mask = mask
         return L_mask.detach(), O_mask.detach(), r, n

@@ -55,6 +55,7 @@ class PARSeq_PD(CrossEntropySystem):
                  head_char_emb_tying: bool, update_content: bool,
                  debug: bool = False, **kwargs: Any) -> None:
         self.debug = debug
+        self.results = []
         super().__init__(charset_train, charset_test, batch_size, lr, warmup_pct, weight_decay, self.debug)
         print('Model : PARSeq_PD')
         self.save_hyperparameters()
@@ -143,7 +144,7 @@ class PARSeq_PD(CrossEntropySystem):
         # current mask will be subset previous mask. There are newly decoded positions.
         # when decoding, only L embs of previously decoded positions (excluding [B]) should be unmasked.
         # mask of L and O will be a bit different.  
-        par_dec = ParallelDecoding(self.dec_iters, S, bs)
+        par_dec = ParallelDecoding(self.dec_iters, S)
         lan_ids = torch.full((bs, S + 1), self.pad_id, dtype=torch.long, device=self._device)
         lan_ids[:, 0] = self.bos_id
         O_mask = torch.ones(bs, S, dtype=torch.bool, device=self._device)
@@ -152,8 +153,7 @@ class PARSeq_PD(CrossEntropySystem):
             # gather masked O to use as Q, unmasked L to use as K, V 
             # only attention on previously decoded positions are allowed
             pos_queries_t = pos_queries[torch.where(O_mask)].reshape(bs, -1, D)
-            lan_ids_t = lan_ids[torch.where(~L_mask)].reshape(bs, -1)
-            pos_out, _ = self.decode(lan_ids_t, memory, tgt_query=pos_queries_t)
+            pos_out, _ = self.decode(lan_ids, memory, tgt_padding_mask=L_mask, tgt_query=pos_queries_t)
             # tgt : L(ids)
             # memory : V
             # tgt_mask : L-L Q-K mask
@@ -196,19 +196,27 @@ class PARSeq_PD(CrossEntropySystem):
         memory = self.encode(images)
         L_ids = self.tokenizer.encode(labels, self._device)
         L_ids = F.pad(L_ids, (0, self.max_label_length + 2 - L_ids.shape[1]), "constant", self.pad_id)
-        par_dec = ParallelDecoding(self.dec_iters, self.max_label_length + 1, bs)
+        par_dec = ParallelDecoding(self.dec_iters, self.max_label_length + 1)
         while True:
             L_mask, O_mask, r, n = par_dec.get_random_mask()
             if n > 1: break
-        L_ids_in = L_ids[torch.where(~L_mask)].reshape(bs, -1)
-        L_ids_tgt = L_ids[:, 1:][torch.where(O_mask)].reshape(bs, -1)
+        mask_ind = torch.where(O_mask)[0]
+        L_ids_tgt = L_ids[:, 1:][:, mask_ind]
         pos_queries = self.pos_queries[:, :self.max_label_length + 1, :].expand(bs, -1, -1)
         D = pos_queries.shape[-1]
-        O_embs = pos_queries[torch.where(O_mask == True)].reshape(bs, -1, D)
-        out, _ = self.decode(L_ids_in, memory, tgt_query=O_embs)
-        logits = self.head(out).flatten(end_dim=1)
-        loss = F.cross_entropy(logits, L_ids_tgt.flatten())
+        O_embs = pos_queries[:, mask_ind, :]
+        attn_mask_OL = L_mask.expand(len(mask_ind), -1).to(O_embs.device)
+        out, _ = self.decode(L_ids, memory, tgt_query_mask=attn_mask_OL, tgt_query=O_embs)
+        logits = self.head(out)
+        loss = F.cross_entropy(logits.moveaxis(-1, 1), L_ids_tgt)
         self.log('loss', loss)
         if torch.isnan(loss):
             import ipdb; ipdb.set_trace(context=11) # #FF0000
+        
+        results = torch.all(logits.argmax(-1) == L_ids_tgt, -1).tolist()
+        self.results.extend(results)
+        if len(self.results) > 10000:
+            train_acc = sum(self.results) / len(self.results) * 100
+            self.log('train_acc', train_acc)
+            self.results = []
         return loss
