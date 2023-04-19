@@ -110,7 +110,8 @@ def main():
     model = instantiate(cfg.model)
     hp = model.hparams
     print(model.hparams)
-    model.load_state_dict(torch.load(args.checkpoint, map_location='cuda')['state_dict'])
+    # model.load_state_dict(torch.load(args.checkpoint, map_location='cuda')['state_dict'])
+    model.load_state_dict(torch.load(args.checkpoint, map_location='cuda'))
     model.eval().cuda()
     
     datamodule = SceneTextDataModule(args.data_root, '_unused_', hp.img_size, hp.max_label_length, hp.charset_train,

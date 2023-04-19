@@ -110,7 +110,9 @@ class BaseSystem(pl.LightningModule, ABC):
         if validation:
             logits, loss, logits_inter, loss_inter, loss_numel = self.forward_logits_loss(images, labels)
         else:
-            logits, logits_inter, agg = self.forward(images)
+            # logits, logits_inter, agg = self.forward(images)
+            logits = self.forward(images)
+            logits_inter = logits
             loss = loss_inter = loss_numel = None
 
         probs = logits.softmax(-1)

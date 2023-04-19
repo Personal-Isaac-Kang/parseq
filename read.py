@@ -81,29 +81,31 @@ def main():
         image.save(image_save_path)
         image_t = img_transform(image).unsqueeze(0).cuda()
 
-        logits, logits_inter, agg = model(image_t, debug=args.debug, DEC_IDX=0, REF_IDX=0)
+        # logits, logits_inter, agg = model(image_t, debug=args.debug, DEC_IDX=0, REF_IDX=0)
+        logits, logits_inter, agg = model(image_t, debug=args.debug)
         dist = logits.softmax(-1)
         dist_inter = logits_inter.softmax(-1)
         pred, prob_seq = model.tokenizer.decode(dist)
         pred_inter, prob_seq_inter = model.tokenizer.decode(dist_inter)
         '''
-        Uncomment single line for desired visualization.
+        Uncomment lines for desired visualization.
         '''
+        # import ipdb; ipdb.set_trace(context=11) # #FF0000
         #- decoder
-        visualize_char_probs(pred_inter, dist_inter, model, image_save_path, 'dec')
-        visualize_attn_balance(pred, pred_inter, agg.sa_weights_dec, hparams, image_save_path, module='decoder')
-        visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_dec, hparams, image, image_save_path, Q='VLO', K='VLO', module='decoder')
-        visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_dec, hparams, image, image_save_path, Q='O', K='V', module='decoder')
-        visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_dec, hparams, image, image_save_path, Q='O', K='L', module='decoder')
-        visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_dec, hparams, image, image_save_path, Q='O', K='O', module='decoder')
-        visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_dec, hparams, image, image_save_path, Q='L', K='L', module='decoder')
-        #- refiner
+        # visualize_char_probs(pred_inter, dist_inter, model, image_save_path, 'dec')
+        # visualize_attn_balance(pred, pred_inter, agg.sa_weights_dec, hparams, image_save_path, module='decoder')
+        # visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_dec, hparams, image, image_save_path, Q='VLO', K='VLO', module='decoder')
+        # visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_dec, hparams, image, image_save_path, Q='O', K='V', module='decoder')
+        # visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_dec, hparams, image, image_save_path, Q='O', K='L', module='decoder')
+        # visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_dec, hparams, image, image_save_path, Q='O', K='O', module='decoder')
+        # visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_dec, hparams, image, image_save_path, Q='L', K='L', module='decoder')
+        # #- refiner
         visualize_char_probs(pred, dist, model, image_save_path, 'ref')
-        visualize_attn_balance(pred, pred_inter, agg.sa_weights_ref, hparams, image_save_path, module='refiner')
-        visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_ref, hparams, image, image_save_path, Q='VLO', K='VLO', module='refiner')
-        visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_ref, hparams, image, image_save_path, Q='O', K='V', module='refiner')
-        visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_ref, hparams, image, image_save_path, Q='O', K='L', module='refiner')
-        visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_ref, hparams, image, image_save_path, Q='O', K='O', module='refiner')
+        # visualize_attn_balance(pred, pred_inter, agg.sa_weights_ref, hparams, image_save_path, module='refiner')
+        # visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_ref, hparams, image, image_save_path, Q='VLO', K='VLO', module='refiner')
+        # visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_ref, hparams, image, image_save_path, Q='O', K='V', module='refiner')
+        # visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_ref, hparams, image, image_save_path, Q='O', K='L', module='refiner')
+        # visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_ref, hparams, image, image_save_path, Q='O', K='O', module='refiner')
         
         print(f'{basename}: {pred[0]}')
 

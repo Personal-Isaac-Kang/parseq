@@ -38,18 +38,7 @@ DEBUG_LAYER_INDEX = 0
 @dataclass
 class System_Data:
     sa_weights: torch.Tensor = None
-    ca_weights: torch.Tensor = None
-    main_pt_1: torch.Tensor = None
-    main_pt_2: torch.Tensor = None
-    main_pt_3: torch.Tensor = None
-    main_pt_4: torch.Tensor = None
-    main_pt_5: torch.Tensor = None
-    res_pt_1: torch.Tensor = None
-    res_pt_2: torch.Tensor = None
-    res_pt_3: torch.Tensor = None
-    res_pt_4: torch.Tensor = None
-    memory: torch.Tensor = None
-    content: torch.Tensor = None
+
 
 
 class PARSeq_NP_1(CrossEntropySystem):
