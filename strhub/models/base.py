@@ -105,6 +105,7 @@ class BaseSystem(pl.LightningModule, ABC):
             img_keys = [None] * len(images)
             img_origs = [None] * len(images)
 
+        #- forward pass
         total, correct, ned, confidence, label_length = 0, 0, 0, 0, 0
         correct_inter, ned_inter, confidence_inter = 0, 0, 0
         if validation:
@@ -113,6 +114,7 @@ class BaseSystem(pl.LightningModule, ABC):
             logits, logits_inter, agg = self.forward(images)
             loss = loss_inter = loss_numel = None
 
+        #- evaluate logits
         probs = logits.softmax(-1)
         preds, probs = self.tokenizer.decode(probs)
         preds = [self.charset_adapter(pred) for pred in preds]
@@ -128,7 +130,8 @@ class BaseSystem(pl.LightningModule, ABC):
                     img_orig.save(f'{debug_dir}/images/{dname}/{img_key}_{gt.replace("/", chr(0x2215))}_{pred.replace("/", chr(0x2215))}.png')
             total += 1
             label_length += len(pred)
-            
+        
+        #- evaluate intermediate logits
         probs_inter = logits_inter.softmax(-1)
         preds_inter, probs_inter = self.tokenizer.decode(probs_inter)
         preds_inter = [self.charset_adapter(pred_inter) for pred_inter in preds_inter]

@@ -129,7 +129,6 @@ class DecoderLayer(nn.Module):
         O_norm = self.norm_O(O)
         embs_norm = torch.cat([V_norm, L_norm, O_norm, dummy_emb], dim=1)
         
-        # import ipdb; ipdb.set_trace(context=11) # #FF0000
         attn_mask_V, attn_mask_L, attn_mask_O, _ = torch.split(attn_mask, [L_V, L_L, L_O, 1], dim=0)
         
         # SA
