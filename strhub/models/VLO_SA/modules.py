@@ -84,8 +84,8 @@ class Decoder(nn.Module):
             vis, lan, pos, agg = dec_layer(vis, lan, pos, attn_mask, padding_mask, debug=debug)
             aggs.append(agg)
             
-        vis = self.norm(vis)
-        lan = self.norm(lan)
+        # vis = self.norm(vis)
+        # lan = self.norm(lan)
         pos = self.norm(pos)
         return vis, lan, pos, aggs
     
