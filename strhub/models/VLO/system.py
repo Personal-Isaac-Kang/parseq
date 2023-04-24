@@ -291,16 +291,16 @@ class VLO(CrossEntropySystem):
         - Validation loss computation
         """
         logits, logits_inter, _ = self.forward(images, validation=True)
-        # ids = self.tokenizer.encode(labels, self._device)
-        # tgt_out = ids[:, 1:]  # Discard [B]
-        # L_O = self.max_label_length + 1 # +1 for [E]
-        # tgt_out = F.pad(tgt_out, (0, L_O - tgt_out.shape[1]), "constant", self.pad_id)
-        # loss = nn.CrossEntropyLoss(ignore_index=self.pad_id)(logits.moveaxis(-1, 1), tgt_out)
-        # loss_inter = nn.CrossEntropyLoss(ignore_index=self.pad_id)(logits_inter.moveaxis(-1, 1), tgt_out)
-        # loss_numel = (tgt_out != self.pad_id).sum()
-        loss = 0
-        loss_inter = 0
-        loss_numel = 1
+        ids = self.tokenizer.encode(labels, self._device)
+        tgt_out = ids[:, 1:]  # Discard [B]
+        L_O = self.max_label_length + 1 # +1 for [E]
+        tgt_out = F.pad(tgt_out, (0, L_O - tgt_out.shape[1]), "constant", self.pad_id)
+        loss = nn.CrossEntropyLoss(ignore_index=self.pad_id)(logits.moveaxis(-1, 1), tgt_out)
+        loss_inter = nn.CrossEntropyLoss(ignore_index=self.pad_id)(logits_inter.moveaxis(-1, 1), tgt_out)
+        loss_numel = (tgt_out != self.pad_id).sum()
+        # loss = 0
+        # loss_inter = 0
+        # loss_numel = 1
         return logits, loss, logits_inter, loss_inter, loss_numel
 
     def training_step(self, batch, batch_idx) -> STEP_OUTPUT:

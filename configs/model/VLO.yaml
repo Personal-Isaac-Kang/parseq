@@ -1,5 +1,5 @@
-name: VLO_SA
-_target_: strhub.models.VLO_SA.system.VLO_SA
+name: VLO
+_target_: strhub.models.VLO.system.VLO
 
 # Data
 patch_size: [ 4, 8 ]  # [ height, width ]

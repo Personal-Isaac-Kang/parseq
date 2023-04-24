@@ -98,9 +98,7 @@ class DecoderLayer(nn.Module):
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1, activation='gelu',
                  layer_norm_eps=1e-5):
         super().__init__()
-        self.mha_V = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
-        self.mha_L = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
-        self.mha_O = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
+        self.mha = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
         
         self.ff = FeedForwardLayer(d_model, dim_feedforward, dropout, activation)
         
@@ -124,26 +122,20 @@ class DecoderLayer(nn.Module):
         L_L = L.shape[1]
         L_O = O.shape[1]
         
+        embs = torch.cat([V, L, O, dummy_emb], dim=1)
         V_norm = V
         L_norm = self.norm_L(L)
         O_norm = self.norm_O(O)
         embs_norm = torch.cat([V_norm, L_norm, O_norm, dummy_emb], dim=1)
         
-        attn_mask_V, attn_mask_L, attn_mask_O, _ = torch.split(attn_mask, [L_V, L_L, L_O, 1], dim=0)
-        
         # SA
-        V_res, _ = self.mha_V(V_norm, embs_norm, embs_norm, attn_mask=attn_mask_V, key_padding_mask=padding_mask)
-        L_res, _ = self.mha_L(L_norm, embs_norm, embs_norm, attn_mask=attn_mask_L, key_padding_mask=padding_mask)
-        O_res, _ = self.mha_O(O_norm, embs_norm, embs_norm, attn_mask=attn_mask_O, key_padding_mask=padding_mask)
-        V = V + self.dropout1(V_res)
-        L = L + self.dropout1(L_res)
-        O = O + self.dropout1(O_res)
-        embs = torch.cat([V, L, O], dim=1)
+        embs_res, _ = self.mha(embs_norm, embs_norm, embs_norm, attn_mask=attn_mask, key_padding_mask=padding_mask)
+        embs = embs + self.dropout1(embs_res)
         
         # FF
         embs_res = self.ff(embs)
         embs = embs + self.dropout2(embs_res)
-        V, L, O = torch.split(embs, [L_V, L_L, L_O], dim=1)
+        V, L, O, _ = torch.split(embs, [L_V, L_L, L_O, 1], dim=1)
         
         return V, L, O, None
     
