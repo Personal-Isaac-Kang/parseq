@@ -24,6 +24,8 @@ from torch.nn.modules import transformer
 
 from timm.models.vision_transformer import VisionTransformer, PatchEmbed
 
+from strhub.models.attention import MultiheadAttentionSep
+
 @dataclass
 class Module_Data:
     sa_weights: torch.Tensor=None
@@ -95,9 +97,7 @@ class DecoderLayer(nn.Module):
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1, activation='gelu',
                  layer_norm_eps=1e-5):
         super().__init__()
-        self.mha_V = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
-        self.mha_L = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
-        self.mha_O = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
+        self.mha_sep = MultiheadAttentionSep(d_model, nhead, dropout=dropout, batch_first=True)
         
         self.ff = FeedForwardLayer(d_model, dim_feedforward, dropout, activation)
         
@@ -112,32 +112,22 @@ class DecoderLayer(nn.Module):
         """
         Vision-Langauge-Ordinal Transformer decoder.
         """
-        L_V = V.shape[1]
-        L_L = L.shape[1]
-        L_O = O.shape[1]
-        
         V_norm = V
         L_norm = self.norm_L(L)
         O_norm = self.norm_O(O)
-        embs_norm = torch.cat([V_norm, L_norm, O_norm], dim=1)
-        
-        attn_mask_V, attn_mask_L, attn_mask_O = torch.split(attn_mask, [L_V, L_L, L_O], dim=0)
         
         # SA
-        V_res, _ = self.mha_V(V_norm, embs_norm, embs_norm, attn_mask=attn_mask_V, key_padding_mask=padding_mask)
-        L_res, _ = self.mha_L(L_norm, embs_norm, embs_norm, attn_mask=attn_mask_L, key_padding_mask=padding_mask)
-        O_res, _ = self.mha_O(O_norm, embs_norm, embs_norm, attn_mask=attn_mask_O, key_padding_mask=padding_mask)
-        V = V + self.dropout(V_res)
-        L = L + self.dropout(L_res)
+        '''
+        O is used as query. V and L are used as key & value. Key and value are generated from V and L each separately.
+        '''
+        O_res, _ = self.mha_sep(V_norm, L_norm, O_norm, attn_mask=attn_mask, key_padding_mask=padding_mask)
         O = O + self.dropout(O_res)
-        embs = torch.cat([V, L, O], dim=1)
         
         # FF
-        embs_res = self.ff(embs)
-        embs = embs + self.dropout(embs_res)
-        V, L, O = torch.split(embs, [L_V, L_L, L_O], dim=1)
+        O_res = self.ff(O)
+        O = O + self.dropout(O_res)
         
-        return V, L, O, None
+        return None, None, O, None
     
 
 class FeedForwardLayer(nn.Module):
