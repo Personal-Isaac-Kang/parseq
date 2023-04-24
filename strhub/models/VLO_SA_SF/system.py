@@ -42,8 +42,9 @@ class System_Data:
     sa_weights_ref: Tensor = None
 
 class VLO_SA_SF(CrossEntropySystem):
-    """ Separate QKV calculation for different modalities
-    Separate FF for different modalities"""
+    """Separate QKV calculation for V, L, O.
+    Also separate feedforward.
+    """
 
     def __init__(self, charset_train: str, charset_test: str, max_label_length: int,
                  batch_size: int, lr: float, warmup_pct: float, weight_decay: float,
@@ -98,9 +99,9 @@ class VLO_SA_SF(CrossEntropySystem):
         self.rtd_head_ref = nn.Linear(embed_dim, 1)
 
         # Positional Embeddings
-        self.pos_embed_dec_L = nn.Parameter(torch.Tensor(1, max_label_length + 1, embed_dim)) # +1 for <eos>
-        self.pos_embed_dec_O = nn.Parameter(torch.Tensor(1, max_label_length + 1, embed_dim))
-        self.pos_embed_ref_L = nn.Parameter(torch.Tensor(1, max_label_length + 1, embed_dim))
+        self.pos_embed_dec_L = nn.Parameter(torch.Tensor(1, max_label_length + 2, embed_dim)) # +2 for [B], [E]
+        self.pos_embed_dec_O = nn.Parameter(torch.Tensor(1, max_label_length + 1, embed_dim)) # +1 for [E]
+        self.pos_embed_ref_L = nn.Parameter(torch.Tensor(1, max_label_length + 2, embed_dim))
         self.pos_embed_ref_O = nn.Parameter(torch.Tensor(1, max_label_length + 1, embed_dim))
         self.dropout = nn.Dropout(p=dropout)
         
@@ -121,7 +122,6 @@ class VLO_SA_SF(CrossEntropySystem):
         self.attn_mask_refine = am.get_attn_mask(img_size, patch_size, refine_layer=True)
         am.visualize_attn_mask(self.attn_mask)
         am.visualize_attn_mask(self.attn_mask_refine, refine_layer=True)
-        self.dummy_emb = torch.zeros((1, 1, embed_dim))
         
     @torch.jit.ignore
     def no_weight_decay(self):
@@ -156,7 +156,7 @@ class VLO_SA_SF(CrossEntropySystem):
             
         return lan
 
-    def decode(self, vis:torch.Tensor, lan:torch.Tensor,  pos:torch.Tensor, dummy_emb:torch.Tensor,
+    def decode(self, vis:torch.Tensor, lan:torch.Tensor,  pos:torch.Tensor,
                attn_mask:torch.Tensor, padding_mask:Optional[Tensor]=None, debug=False):
         """
         Used in forward-pass of train.
@@ -169,10 +169,9 @@ class VLO_SA_SF(CrossEntropySystem):
         """
         lan = self.dropout(lan)
         pos = self.dropout(pos)
-        dummy_emb = dummy_emb.expand(pos.shape[0], -1, -1)
-        return self.decoder(vis, lan, pos, dummy_emb, attn_mask=attn_mask, padding_mask=padding_mask, debug=debug)
+        return self.decoder(vis, lan, pos, attn_mask=attn_mask, padding_mask=padding_mask, debug=debug)
     
-    def refine(self, vis:torch.Tensor, lan:torch.Tensor,  pos:torch.Tensor, dummy_emb:torch.Tensor,
+    def refine(self, vis:torch.Tensor, lan:torch.Tensor,  pos:torch.Tensor,
                attn_mask:torch.Tensor, padding_mask:Optional[Tensor]=None, debug=False):
         """
         Used in forward-pass of train.
@@ -187,9 +186,8 @@ class VLO_SA_SF(CrossEntropySystem):
         """
         lan = self.dropout(lan)
         pos = self.dropout(pos)
-        dummy_emb = dummy_emb.expand(pos.shape[0], -1, -1)
         # vis is 
-        return self.refiner(vis.detach(), lan.detach(), pos.detach(), dummy_emb, attn_mask=attn_mask, padding_mask=padding_mask, debug=debug)
+        return self.refiner(vis.detach(), lan.detach(), pos.detach(), attn_mask=attn_mask, padding_mask=padding_mask, debug=debug)
  
     def forward(self, images:Tensor, validation: bool = False, debug: bool = False, DEC_IDX=0, REF_IDX=0) -> Tensor:
         """
@@ -223,7 +221,6 @@ class VLO_SA_SF(CrossEntropySystem):
         lan_ids[:, 0] = self.bos_id
         ord_dec_in = self.pos_embed_dec_O[:, :L_O].expand(bs, -1, -1)
         ord_dec_in = ord_dec_in + self.modal_embed[:, 2]
-        dummy_emb = self.dummy_emb.to(self._device)
         attn_mask = self.attn_mask.to(self._device)
         #* decoding
         logits_dec = []
@@ -231,9 +228,9 @@ class VLO_SA_SF(CrossEntropySystem):
         for i in range(num_steps):
             j = i + 1 # next token index
             lan_dec_in = self.to_lan(lan_ids, 'decoder')
-            select_indices = torch.arange(L_V).tolist() + (L_V + torch.arange(j)).tolist() + [L_V + L_L + i] + [-1]
+            select_indices = torch.arange(L_V).tolist() + (L_V + torch.arange(j)).tolist() + [L_V + L_L + i]
             attn_mask_t = attn_mask[select_indices][:, select_indices]
-            vis_dec_out, lan_dec_out, ord_dec_out, agg_dec_t = self.decode(vis, lan_dec_in[:, :j], ord_dec_in[:, i:j], dummy_emb, attn_mask=attn_mask_t, debug=debug)
+            vis_dec_out, lan_dec_out, ord_dec_out, agg_dec_t = self.decode(vis, lan_dec_in[:, :j], ord_dec_in[:, i:j], attn_mask=attn_mask_t, debug=debug)
             agg_dec_ts.append(agg_dec_t)
             logits_dec_i = self.char_head_dec(ord_dec_out)
             logits_dec.append(logits_dec_i)
@@ -271,10 +268,10 @@ class VLO_SA_SF(CrossEntropySystem):
             #* attention mask
             attn_mask_refine = self.attn_mask_refine.to(self._device)
             select_indices = torch.arange(L_V).tolist() + (L_V + torch.arange(L_S_L)).tolist()\
-                +  (L_V +  L_L + torch.arange(L_S_O)).tolist() + [-1]
+                +  (L_V +  L_L + torch.arange(L_S_O)).tolist()
             attn_mask_refine_t = attn_mask_refine[select_indices][:, select_indices]
             #* refine
-            vis_ref_out, lan_ref_out, ord_ref_out, agg_ref = self.refine(vis, lan_ref_in, ord_ref_in, dummy_emb, attn_mask_refine_t, padding_mask_VLO, debug=debug)
+            vis_ref_out, lan_ref_out, ord_ref_out, agg_ref = self.refine(vis, lan_ref_in, ord_ref_in, attn_mask_refine_t, padding_mask_VLO, debug=debug)
             logits_ref = self.char_head_ref(ord_ref_out)
             logits = logits_ref
             
@@ -334,16 +331,14 @@ class VLO_SA_SF(CrossEntropySystem):
         ord_dec_in = ord_dec_in[:, :tgt_out.shape[1]]
         #* padding mask
         padding_mask = (tgt_in == self.pad_id)
-        padding_mask = F.pad(padding_mask, (L_V, ord_dec_in.shape[1] + 1), "constant", 0) # +1 for dummy token
-        #* dummy emb
-        dummy_emb = self.dummy_emb.to(self._device)
+        padding_mask = F.pad(padding_mask, (L_V, ord_dec_in.shape[1]), "constant", 0)
         #* attention mask
         attn_mask = self.attn_mask.to(self._device)
         select_indices = torch.arange(L_V).tolist() + (L_V + torch.arange(tgt_in.shape[1])).tolist()\
-            + (L_V + L_L + torch.arange(tgt_out.shape[1])).tolist() + [-1]
+            + (L_V + L_L + torch.arange(tgt_out.shape[1])).tolist()
         attn_mask_t = attn_mask[select_indices][:, select_indices]
         #* decoding
-        vis_dec_out, lan_dec_out, ord_dec_out, agg_dec = self.decode(vis, lan_dec_in, ord_dec_in, dummy_emb, attn_mask_t, padding_mask)
+        vis_dec_out, lan_dec_out, ord_dec_out, agg_dec = self.decode(vis, lan_dec_in, ord_dec_in, attn_mask_t, padding_mask)
         logits_dec = self.char_head_dec(ord_dec_out)
         loss_dec = nn.CrossEntropyLoss(ignore_index=self.pad_id)(logits_dec.moveaxis(-1, 1), tgt_out)
         probs_dec = logits_dec.softmax(-1)
@@ -374,17 +369,17 @@ class VLO_SA_SF(CrossEntropySystem):
             ord_ref_in = ord_ref_in + self.modal_embed[:, 2]
             #* padding mask
             padding_mask_L = (ids_sampled == self.pad_id)
-            padding_mask_VLO = F.pad(padding_mask_L, (L_V, L_S_O + 1), "constant", 0)
+            padding_mask_VLO = F.pad(padding_mask_L, (L_V, L_S_O), "constant", 0)
             #- mask visual embs with probability
             if torch.rand(1).item() < self.ref_vis_masking_prob:
                 padding_mask_VLO[:, :L_V] = 1
             #* attention mask
             attn_mask_refine = self.attn_mask_refine.to(self._device)
             select_indices = torch.arange(L_V).tolist() + (L_V + torch.arange(L_S_L)).tolist()\
-                + (L_V + L_L + torch.arange(L_S_O)).tolist() + [-1]
+                + (L_V + L_L + torch.arange(L_S_O)).tolist()
             attn_mask_refine_t = attn_mask_refine[select_indices][:, select_indices]
             #* refiner
-            vis_ref_out, lan_ref_out, ord_ref_out, agg_ref = self.refine(vis, lan_ref_in, ord_ref_in, dummy_emb, attn_mask_refine_t, padding_mask_VLO)
+            vis_ref_out, lan_ref_out, ord_ref_out, agg_ref = self.refine(vis, lan_ref_in, ord_ref_in, attn_mask_refine_t, padding_mask_VLO)
             #- loss
             #* Language Modeling
             logits_ref_char = self.char_head_ref(ord_ref_out)

@@ -109,21 +109,7 @@ class AttentionMask:
         attn_P = torch.cat((attn_PV, attn_PL, attn_PP), dim=1)
         
         attn_mask = torch.cat((attn_V, attn_L, attn_P), dim=0)
-        attn_mask = self.add_dummy_attn(attn_mask)
         
-        return attn_mask
-
-    def add_dummy_attn(self, attn_mask):
-        """ Add attention to dummy token(extra fixed zero token),
-        which is appended to the end of the concatenated tokens, to get around the
-        gradient error caused by all keys being masked. When all keys are masked,
-        attention to the dummy token is enabled.
-        """
-        attn_mask = F.pad(attn_mask, (0, 0, 0, 1), 'constant', float('-inf'))
-        attn_mask = F.pad(attn_mask, (0, 1), 'constant', 0)
-        for i, row in enumerate(attn_mask):
-            if torch.any(row[:-1] != float('-inf')):
-                attn_mask[i, -1] = float('-inf')
         return attn_mask
 
     def visualize_attn_mask(self, attn_mask, refine_layer:bool=False):

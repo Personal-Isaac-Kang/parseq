@@ -24,9 +24,6 @@ from torch.nn.modules import transformer
 
 from timm.models.vision_transformer import VisionTransformer, PatchEmbed
 
-from strhub.models.attention import MultiheadAttention
-
-
 @dataclass
 class Module_Data:
     sa_weights: torch.Tensor=None
@@ -79,10 +76,10 @@ class Decoder(nn.Module):
         self.num_layers = num_layers
         self.norm = norm
 
-    def forward(self, vis, lan, pos, dummy, attn_mask:Optional[Tensor]=None, padding_mask:Optional[Tensor]=None, debug=False):
+    def forward(self, vis, lan, pos, attn_mask:Optional[Tensor]=None, padding_mask:Optional[Tensor]=None, debug=False):
         aggs = []
         for i, dec_layer in enumerate(self.layers):
-            vis, lan, pos, agg = dec_layer(vis, lan, pos, dummy, attn_mask, padding_mask, debug=debug)
+            vis, lan, pos, agg = dec_layer(vis, lan, pos, attn_mask, padding_mask, debug=debug)
             aggs.append(agg)
             
         vis = self.norm(vis)
@@ -98,44 +95,38 @@ class DecoderLayer(nn.Module):
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1, activation='gelu',
                  layer_norm_eps=1e-5):
         super().__init__()
-        self.mha = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
+        self.mha = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
         
         self.ff = FeedForwardLayer(d_model, dim_feedforward, dropout, activation)
         
         self.norm_L = nn.LayerNorm(d_model, eps=layer_norm_eps)
         self.norm_O = nn.LayerNorm(d_model, eps=layer_norm_eps)
         
-        self.dropout1 = nn.Dropout(dropout)
-        self.dropout2 = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(dropout)
 
-        self.dummy_emb = torch.zeros((1, d_model))
-        
-
-    def forward(self, V:Tensor, L:Tensor, O:Tensor, dummy_emb:Tensor,
+    def forward(self, V:Tensor, L:Tensor, O:Tensor,
                 attn_mask:Optional[Tensor]=None, padding_mask:Optional[Tensor]=None, debug=False):
         """
-        Vision-Langauge-Position Transformer decoder.
-        
-        Dummy token is added to handle the softmax gradient error when all keys are masked.
+        Vision-Langauge-Ordinal Transformer decoder.
         """
         L_V = V.shape[1]
         L_L = L.shape[1]
         L_O = O.shape[1]
         
-        embs = torch.cat([V, L, O, dummy_emb], dim=1)
+        embs = torch.cat([V, L, O], dim=1)
         V_norm = V
         L_norm = self.norm_L(L)
         O_norm = self.norm_O(O)
-        embs_norm = torch.cat([V_norm, L_norm, O_norm, dummy_emb], dim=1)
+        embs_norm = torch.cat([V_norm, L_norm, O_norm], dim=1)
         
         # SA
         embs_res, _ = self.mha(embs_norm, embs_norm, embs_norm, attn_mask=attn_mask, key_padding_mask=padding_mask)
-        embs = embs + self.dropout1(embs_res)
+        embs = embs + self.dropout(embs_res)
         
         # FF
         embs_res = self.ff(embs)
-        embs = embs + self.dropout2(embs_res)
-        V, L, O, _ = torch.split(embs, [L_V, L_L, L_O, 1], dim=1)
+        embs = embs + self.dropout(embs_res)
+        V, L, O = torch.split(embs, [L_V, L_L, L_O], dim=1)
         
         return V, L, O, None
     
