@@ -90,9 +90,10 @@ def main():
         '''
         Uncomment lines for desired visualization.
         '''
-        # import ipdb; ipdb.set_trace(context=11) # #FF0000
+        # visualize_char_embed_self_sim(model, image_save_path)
+        
         #- decoder
-        # visualize_char_probs(pred_inter, dist_inter, model, image_save_path, 'dec')
+        visualize_char_probs(pred_inter, dist_inter, model, image_save_path, 'dec')
         # visualize_attn_balance(pred, pred_inter, agg.sa_weights_dec, hparams, image_save_path, module='decoder')
         # visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_dec, hparams, image, image_save_path, Q='VLO', K='VLO', module='decoder')
         # visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_dec, hparams, image, image_save_path, Q='O', K='V', module='decoder')
@@ -100,7 +101,7 @@ def main():
         # visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_dec, hparams, image, image_save_path, Q='O', K='O', module='decoder')
         # visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_dec, hparams, image, image_save_path, Q='L', K='L', module='decoder')
         # #- refiner
-        visualize_char_probs(pred, dist, model, image_save_path, 'ref')
+        # visualize_char_probs(pred, dist, model, image_save_path, 'ref')
         # visualize_attn_balance(pred, pred_inter, agg.sa_weights_ref, hparams, image_save_path, module='refiner')
         # visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_ref, hparams, image, image_save_path, Q='VLO', K='VLO', module='refiner')
         # visualize_self_attn_VLO(pred, pred_inter, agg.sa_weights_ref, hparams, image, image_save_path, Q='O', K='V', module='refiner')
@@ -345,13 +346,21 @@ def visualize_char_probs(pred, dist, model, image_save_path, tag):
     save_path = f'{filename_path}_{tag}_char_probs{ext}'
     save_heatmap(dist, rows, cols, '', save_path, 1.0, figsize=(30, len(rows)), annot=True, annot_size=5, tick_size=15, labelsize=15, linewidths=1)
 
-'''
+def visualize_char_embed_self_sim(model, image_save_path, sim_scale=1.0):
+    emb = model.text_embed.embedding.weight.detach().cpu().numpy()
+    charset_train = model.hparams.charset_train
+    rows = cols = ['[E]'] + list(charset_train) + ['[B]', '[P]']
+    visualize_similarity(emb, emb, rows, cols, image_save_path, sim_scale, annot=False, figsize=(30,30))
+
 def visualize_similarity(target, source, rows, cols, image_save_path, sim_scale=1.0, annot=False, tag='', figsize=(15,15)):
     filename_path, ext = os.path.splitext(image_save_path)
     target = normalize(target)
     source = normalize(source)
     similarity_mtx = target @  source.T
     save_heatmap(similarity_mtx, rows, cols, '', f'{filename_path}_sim{tag}{ext}', sim_scale, annot=annot, annot_size=10, tick_size=10, labelsize=10, figsize=figsize)
+
+'''
+
  
 
 def visualize_head_self_sim(model, image_save_path):
@@ -382,13 +391,6 @@ def visualize_pos_embed_self_sim(pred, model, image_save_path, sim_scale=1.0):
     emb = model.pos_embed_O.detach().cpu().numpy()[0][:len(pred), :]
     rows = cols = list(range(1, len(pred) + 1))
     visualize_similarity(emb, emb, rows, cols, image_save_path, sim_scale, annot=True)
-    
-    
-def visualize_char_embed_self_sim(pred, model, image_save_path, sim_scale=1.0):
-    emb = model.text_embed.embedding.weight.detach().cpu().numpy()
-    charset_train = model.hparams.charset_train
-    rows = cols = ['[E]'] + list(charset_train) + ['[B]', '[P]']
-    visualize_similarity(emb, emb, rows, cols, image_save_path, sim_scale, annot=False, figsize=(30,30))
     
     
 def visualize_sim_with_pe(target, pred, model, image_save_path, sim_scale=1.0):

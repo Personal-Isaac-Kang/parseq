@@ -84,8 +84,8 @@ class PARSeq(CrossEntropySystem):
         self.perm_mirrored = perm_mirrored
 
         # # We don't predict <bos> nor <pad>
-        self.head = nn.Linear(embed_dim, len(self.tokenizer) - 2)
-        # self.head = nn.Linear(embed_dim, len(self.tokenizer))
+        # self.head = nn.Linear(embed_dim, len(self.tokenizer) - 2)
+        self.head = nn.Linear(embed_dim, len(self.tokenizer))
         self.text_embed = TokenEmbedding(len(self.tokenizer), embed_dim)
         if head_char_emb_tying:
             self.head.weight = self.text_embed.embedding.weight
@@ -315,7 +315,7 @@ class PARSeq(CrossEntropySystem):
             tgt_mask, query_mask = self.generate_attn_masks(perm)
             out, _ = self.decode(tgt_in, memory, tgt_mask, tgt_padding_mask, tgt_query_mask=query_mask)
             logits = self.head(out).flatten(end_dim=1)
-            loss += n * F.cross_entropy(logits, tgt_out.flatten(), ignore_index=self.pad_id)
+            loss += n * F.cross_entropy(logits, tgt_out.flatten(), ignore_index=self.pad_id, label_smoothing=0.1)
             loss_numel += n
             # After the second iteration (i.e. done with canonical and reverse orderings),
             # remove the [EOS] tokens for the succeeding perms
