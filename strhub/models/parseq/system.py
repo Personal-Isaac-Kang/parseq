@@ -144,10 +144,10 @@ class PARSeq(CrossEntropySystem):
         # Special case for the forward permutation. Faster than using `generate_attn_masks()`
         tgt_mask = query_mask = torch.triu(torch.full((num_steps, num_steps), float('-inf'), device=self._device), 1)
 
-        if debug:
-            sa_weights = []
-            ca_weights = []
-            main_pt_1, main_pt_2, main_pt_3, main_pt_4, res_pt_1, res_pt_2, res_pt_3 = ([] for _ in range(7))
+        # if debug:
+        #     sa_weights = []
+        #     ca_weights = []
+        #     main_pt_1, main_pt_2, main_pt_3, main_pt_4, res_pt_1, res_pt_2, res_pt_3 = ([] for _ in range(7))
         
         if self.decode_ar:
             tgt_in = torch.full((bs, num_steps), self.pad_id, dtype=torch.long, device=self._device)
@@ -163,10 +163,10 @@ class PARSeq(CrossEntropySystem):
                 tgt_out, _aggs = self.decode(tgt_in[:, :j], memory, tgt_mask[:j, :j], tgt_query=pos_queries[:, i:j],
                                       tgt_query_mask=query_mask[i:j, :j])
                 
-                if debug:
-                    _agg = _aggs[DEBUG_LAYER_INDEX]
-                    sa_weights.append(_agg.sa_weights)
-                    ca_weights.append(_agg.ca_weights)
+                # if debug:
+                #     _agg = _aggs[DEBUG_LAYER_INDEX]
+                #     sa_weights.append(_agg.sa_weights)
+                #     ca_weights.append(_agg.ca_weights)
     
                 # the next token probability is in the output's ith token position
                 p_i = self.head(tgt_out)
@@ -184,16 +184,16 @@ class PARSeq(CrossEntropySystem):
             tgt_out, _ = self.decode(tgt_in, memory, tgt_query=pos_queries)
             logits = self.head(tgt_out)
             
-        if debug:
-            if sa_weights[0] is not None:
-                sa_weights = [s[0][0] for s in sa_weights]
-                sa_weights = pad_sequence(sa_weights).Tsa
-            else:
-                sa_weights = None
-            if ca_weights[0] is not None:
-                ca_weights = torch.cat(ca_weights, dim=1) # Shape : 1, L_P, L_V
-            else:
-                ca_weights = None
+        # if debug:
+        #     if sa_weights[0] is not None:
+        #         sa_weights = [s[0][0] for s in sa_weights]
+        #         sa_weights = pad_sequence(sa_weights).Tsa
+        #     else:
+        #         sa_weights = None
+        #     if ca_weights[0] is not None:
+        #         ca_weights = torch.cat(ca_weights, dim=1) # Shape : 1, L_P, L_V
+        #     else:
+        #         ca_weights = None
         
         if self.refine_iters:
             # For iterative refinement, we always use a 'cloze' mask.
@@ -208,10 +208,10 @@ class PARSeq(CrossEntropySystem):
                                       tgt_query=pos_queries, tgt_query_mask=query_mask[:, :tgt_in.shape[1]])
                 logits = self.head(tgt_out)
                 
-        if debug:
-            # aggregate inspection data
-            agg.sa_weights = sa_weights
-            agg.ca_weights = ca_weights
+        # if debug:
+        #     # aggregate inspection data
+        #     agg.sa_weights = sa_weights
+        #     agg.ca_weights = ca_weights
 
         return logits, logits, agg
 
@@ -315,7 +315,7 @@ class PARSeq(CrossEntropySystem):
             tgt_mask, query_mask = self.generate_attn_masks(perm)
             out, _ = self.decode(tgt_in, memory, tgt_mask, tgt_padding_mask, tgt_query_mask=query_mask)
             logits = self.head(out).flatten(end_dim=1)
-            loss += n * F.cross_entropy(logits, tgt_out.flatten(), ignore_index=self.pad_id, label_smoothing=0.0)
+            loss += n * F.cross_entropy(logits, tgt_out.flatten(), ignore_index=self.pad_id, label_smoothing=0.3)
             loss_numel += n
             # After the second iteration (i.e. done with canonical and reverse orderings),
             # remove the [EOS] tokens for the succeeding perms

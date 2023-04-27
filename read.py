@@ -342,9 +342,14 @@ def visualize_char_probs(pred, dist, model, image_save_path, tag):
     rows = pred = list(pred[0]) + ['[E]']
     dist = dist[0].detach().cpu().numpy()[:len(pred), :] # probs up to [E], [seq_len + 1, len(charset_train) - 2]
     charset_train = model.hparams.charset_train
-    cols = ['[E]'] + list(charset_train) + ['[B]', '[P]']
-    save_path = f'{filename_path}_{tag}_char_probs{ext}'
-    save_heatmap(dist, rows, cols, '', save_path, 1.0, figsize=(30, len(rows)), annot=True, annot_size=5, tick_size=15, labelsize=15, linewidths=1)
+    try:
+        cols = ['[E]'] + list(charset_train) + ['[B]', '[P]']
+        save_path = f'{filename_path}_{tag}_char_probs{ext}'
+        save_heatmap(dist, rows, cols, '', save_path, 1.0, figsize=(30, len(rows)), annot=True, annot_size=5, tick_size=15, labelsize=15, linewidths=1)
+    except:
+        cols = ['[E]'] + list(charset_train)
+        save_path = f'{filename_path}_{tag}_char_probs{ext}'
+        save_heatmap(dist, rows, cols, '', save_path, 1.0, figsize=(30, len(rows)), annot=True, annot_size=5, tick_size=15, labelsize=15, linewidths=1)
 
 def visualize_char_embed_self_sim(model, image_save_path, sim_scale=1.0):
     emb = model.text_embed.embedding.weight.detach().cpu().numpy()
