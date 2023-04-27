@@ -271,22 +271,25 @@ class PARSeq_PD(CrossEntropySystem):
         L_ids = self.tokenizer.encode(labels, self._device)
         L_ids = F.pad(L_ids, (0, self.max_label_length + 2 - L_ids.shape[1]), "constant", self.pad_id)
         par_dec = ParallelDecoding(self.dec_iters, self.max_label_length + 1)
-        while True:
-            L_mask, O_mask, r, n = par_dec.get_random_mask()
-            if n > 1: break
-        mask_ind = torch.where(O_mask)[0]
-        L_ids_tgt = L_ids[:, 1:][:, mask_ind]
-        pos_queries = self.pos_queries[:, :self.max_label_length + 1, :].expand(bs, -1, -1)
-        D = pos_queries.shape[-1]
-        O_embs = pos_queries[:, mask_ind, :]
-        attn_mask_OL = L_mask.expand(len(mask_ind), -1).to(O_embs.device)
-        out, _ = self.decode(L_ids, memory, tgt_query_mask=attn_mask_OL, tgt_query=O_embs)
-        logits = self.head(out)
-        loss = F.cross_entropy(logits.moveaxis(-1, 1), L_ids_tgt)
-        self.log('loss', loss)
-        if torch.isnan(loss):
-            import ipdb; ipdb.set_trace(context=11) # #FF0000
-        
+        K = 6
+        loss = 0
+        for k in range(K):
+            while True:
+                L_mask, O_mask, r, n = par_dec.get_random_mask()
+                if n > 1: break
+            mask_ind = torch.where(O_mask)[0]
+            L_ids_tgt = L_ids[:, 1:][:, mask_ind]
+            pos_queries = self.pos_queries[:, :self.max_label_length + 1, :].expand(bs, -1, -1)
+            D = pos_queries.shape[-1]
+            O_embs = pos_queries[:, mask_ind, :]
+            attn_mask_OL = L_mask.expand(len(mask_ind), -1).to(O_embs.device)
+            out, _ = self.decode(L_ids, memory, tgt_query_mask=attn_mask_OL, tgt_query=O_embs)
+            logits = self.head(out)
+            loss += F.cross_entropy(logits.moveaxis(-1, 1), L_ids_tgt)
+            self.log('loss', loss)
+            if torch.isnan(loss):
+                import ipdb; ipdb.set_trace(context=11) # #FF0000
+        loss /= K
         results = torch.all(logits.argmax(-1) == L_ids_tgt, -1).tolist()
         self.results.extend(results)
         if len(self.results) > 10000:
