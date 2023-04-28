@@ -18,6 +18,7 @@ update_content: false
 
 # Training
 lr: 7e-4
+mask_sampling_num: 6
 perm_num: 6
 perm_forward: true
 perm_mirrored: true

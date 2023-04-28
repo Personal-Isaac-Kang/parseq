@@ -84,8 +84,8 @@ class PARSeq(CrossEntropySystem):
         self.perm_mirrored = perm_mirrored
 
         # # We don't predict <bos> nor <pad>
-        # self.head = nn.Linear(embed_dim, len(self.tokenizer) - 2)
-        self.head = nn.Linear(embed_dim, len(self.tokenizer))
+        self.head = nn.Linear(embed_dim, len(self.tokenizer) - 2)
+        # self.head = nn.Linear(embed_dim, len(self.tokenizer))
         self.text_embed = TokenEmbedding(len(self.tokenizer), embed_dim)
         if head_char_emb_tying:
             self.head.weight = self.text_embed.embedding.weight
@@ -183,7 +183,7 @@ class PARSeq(CrossEntropySystem):
             tgt_in = torch.full((bs, 1), self.bos_id, dtype=torch.long, device=self._device)
             tgt_out, _ = self.decode(tgt_in, memory, tgt_query=pos_queries)
             logits = self.head(tgt_out)
-            
+        
         # if debug:
         #     if sa_weights[0] is not None:
         #         sa_weights = [s[0][0] for s in sa_weights]

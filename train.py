@@ -44,7 +44,7 @@ def main(config: DictConfig):
             num_gpus = len(gpus)
         if num_gpus > 1:
             config.trainer.strategy = 'ddp'
-            trainer_strategy = DDPStrategy(find_unused_parameters=True, gradient_as_bucket_view=True)
+            trainer_strategy = DDPStrategy(find_unused_parameters=False, gradient_as_bucket_view=True)
             # Scale steps-based config
             config.trainer.val_check_interval //= num_gpus
             if config.trainer.get('max_steps', -1) > 0:

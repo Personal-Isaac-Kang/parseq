@@ -50,6 +50,7 @@ class PARSeq_PD(CrossEntropySystem):
                  img_size: Sequence[int], patch_size: Sequence[int], embed_dim: int,
                  enc_num_heads: int, enc_mlp_ratio: int, enc_depth: int,
                  dec_num_heads: int, dec_mlp_ratio: int, dec_depth: int,
+                 mask_sampling_num: int,
                  perm_num: int, perm_forward: bool, perm_mirrored: bool,
                  decode_ar: bool, dec_iters: int, refine_iters: int, dropout: float,
                  head_char_emb_tying: bool, update_content: bool,
@@ -75,6 +76,8 @@ class PARSeq_PD(CrossEntropySystem):
         self.max_gen_perms = perm_num // 2 if perm_mirrored else perm_num
         self.perm_forward = perm_forward
         self.perm_mirrored = perm_mirrored
+        
+        self.K = mask_sampling_num
 
         # # We don't predict <bos> nor <pad>
         self.head = nn.Linear(embed_dim, len(self.tokenizer))
@@ -199,59 +202,59 @@ class PARSeq_PD(CrossEntropySystem):
             # print_parallel_decoding_process(par_dec, t, lan_ids[0])
         return logits, logits, None
     
-    def forward(self, images: Tensor, debug: bool = False) -> Tensor:
-        bs = images.shape[0]
-        num_steps = self.max_label_length + 1
-        memory = self.encode(images)
+    # def forward(self, images: Tensor, debug: bool = False) -> Tensor:
+    #     bs = images.shape[0]
+    #     num_steps = self.max_label_length + 1
+    #     memory = self.encode(images)
 
-        # Query positions up to `num_steps`
-        pos_queries = self.pos_queries[:, :num_steps].expand(bs, -1, -1)
+    #     # Query positions up to `num_steps`
+    #     pos_queries = self.pos_queries[:, :num_steps].expand(bs, -1, -1)
 
-        # Special case for the forward permutation. Faster than using `generate_attn_masks()`
-        tgt_mask = query_mask = torch.triu(torch.full((num_steps, num_steps), float('-inf'), device=self._device), 1)
+    #     # Special case for the forward permutation. Faster than using `generate_attn_masks()`
+    #     tgt_mask = query_mask = torch.triu(torch.full((num_steps, num_steps), float('-inf'), device=self._device), 1)
 
-        tgt_in = torch.full((bs, num_steps), self.pad_id, dtype=torch.long, device=self._device)
-        tgt_in[:, 0] = self.bos_id
+    #     tgt_in = torch.full((bs, num_steps), self.pad_id, dtype=torch.long, device=self._device)
+    #     tgt_in[:, 0] = self.bos_id
 
-        logits = []
-        for i in range(num_steps):
-            j = i + 1  # next token index
-            # Efficient decoding:
-            # Input the context up to the ith token. We use only one query (at position = i) at a time.
-            # This works because of the lookahead masking effect of the canonical (forward) AR context.
-            # Past tokens have no access to future tokens, hence are fixed once computed.
-            tgt_out, _aggs = self.decode(tgt_in[:, :j], memory, tgt_mask[:j, :j], tgt_query=pos_queries[:, i:j],
-                                    tgt_query_mask=query_mask[i:j, :j])
+    #     logits = []
+    #     for i in range(num_steps):
+    #         j = i + 1  # next token index
+    #         # Efficient decoding:
+    #         # Input the context up to the ith token. We use only one query (at position = i) at a time.
+    #         # This works because of the lookahead masking effect of the canonical (forward) AR context.
+    #         # Past tokens have no access to future tokens, hence are fixed once computed.
+    #         tgt_out, _aggs = self.decode(tgt_in[:, :j], memory, tgt_mask[:j, :j], tgt_query=pos_queries[:, i:j],
+    #                                 tgt_query_mask=query_mask[i:j, :j])
             
-            if debug:
-                _agg = _aggs[DEBUG_LAYER_INDEX]
+    #         if debug:
+    #             _agg = _aggs[DEBUG_LAYER_INDEX]
 
-            # the next token probability is in the output's ith token position
-            p_i = self.head(tgt_out)
-            logits.append(p_i)
-            if j < num_steps:
-                # greedy decode. add the next token index to the target input
-                tgt_in[:, j] = p_i.squeeze().argmax(-1)
-                # Efficient batch decoding: If all output words have at least one EOS token, end decoding.
-                if (tgt_in == self.eos_id).any(dim=-1).all():
-                    break
-        logits = torch.cat(logits, dim=1)
+    #         # the next token probability is in the output's ith token position
+    #         p_i = self.head(tgt_out)
+    #         logits.append(p_i)
+    #         if j < num_steps:
+    #             # greedy decode. add the next token index to the target input
+    #             tgt_in[:, j] = p_i.squeeze().argmax(-1)
+    #             # Efficient batch decoding: If all output words have at least one EOS token, end decoding.
+    #             if (tgt_in == self.eos_id).any(dim=-1).all():
+    #                 break
+    #     logits = torch.cat(logits, dim=1)
         
         
-        if self.refine_iters:
-            # For iterative refinement, we always use a 'cloze' mask.
-            # We can derive it from the AR forward mask by unmasking the token context to the right.
-            query_mask[torch.triu(torch.ones(num_steps, num_steps, dtype=torch.bool, device=self._device), 2)] = 0
-            bos = torch.full((bs, 1), self.bos_id, dtype=torch.long, device=self._device)
-            for i in range(self.refine_iters):
-                # Prior context is the previous output.
-                tgt_in = torch.cat([bos, logits[:, :-1].argmax(-1)], dim=1)
-                tgt_padding_mask = ((tgt_in == self.eos_id).cumsum(-1) > 0)  # mask tokens beyond the first EOS token.
-                tgt_out, _ = self.decode(tgt_in, memory, tgt_mask[:tgt_in.shape[1], :tgt_in.shape[1]], tgt_padding_mask,
-                                      tgt_query=pos_queries, tgt_query_mask=query_mask[:, :tgt_in.shape[1]])
-                logits = self.head(tgt_out)
+    #     if self.refine_iters:
+    #         # For iterative refinement, we always use a 'cloze' mask.
+    #         # We can derive it from the AR forward mask by unmasking the token context to the right.
+    #         query_mask[torch.triu(torch.ones(num_steps, num_steps, dtype=torch.bool, device=self._device), 2)] = 0
+    #         bos = torch.full((bs, 1), self.bos_id, dtype=torch.long, device=self._device)
+    #         for i in range(self.refine_iters):
+    #             # Prior context is the previous output.
+    #             tgt_in = torch.cat([bos, logits[:, :-1].argmax(-1)], dim=1)
+    #             tgt_padding_mask = ((tgt_in == self.eos_id).cumsum(-1) > 0)  # mask tokens beyond the first EOS token.
+    #             tgt_out, _ = self.decode(tgt_in, memory, tgt_mask[:tgt_in.shape[1], :tgt_in.shape[1]], tgt_padding_mask,
+    #                                   tgt_query=pos_queries, tgt_query_mask=query_mask[:, :tgt_in.shape[1]])
+    #             logits = self.head(tgt_out)
                 
-        return logits, logits, None
+    #     return logits, logits, None
 
 
 
@@ -271,7 +274,7 @@ class PARSeq_PD(CrossEntropySystem):
         L_ids = self.tokenizer.encode(labels, self._device)
         L_ids = F.pad(L_ids, (0, self.max_label_length + 2 - L_ids.shape[1]), "constant", self.pad_id)
         par_dec = ParallelDecoding(self.dec_iters, self.max_label_length + 1)
-        K = 6
+        K = self.K
         loss = 0
         for k in range(K):
             while True:
