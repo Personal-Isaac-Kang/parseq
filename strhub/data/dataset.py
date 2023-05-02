@@ -73,9 +73,13 @@ class LmdbDataset(Dataset):
             self._env.close()
             self._env = None
 
+    # def _create_env(self):
+    #     return lmdb.open(self.root, max_readers=1, readonly=True, create=False,
+    #                      readahead=False, meminit=False, lock=False)
+        
     def _create_env(self):
         return lmdb.open(self.root, max_readers=1, readonly=True, create=False,
-                         readahead=False, meminit=False, lock=False)
+                         readahead=True, meminit=True, lock=False)
 
     @property
     def env(self):

@@ -29,7 +29,7 @@ data:
   remove_whitespace: true
   normalize_unicode: true
   augment: true
-  num_workers: 4
+  num_workers: 2
 
 trainer:
   _target_: pytorch_lightning.Trainer
