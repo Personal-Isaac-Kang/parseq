@@ -1,5 +1,5 @@
-name: parseq_PD_1
-_target_: strhub.models.parseq_PD_1.system.PARSeq_PD_1
+name: parseq_R
+_target_: strhub.models.parseq_R.system.PARSeq_R
 
 # Data
 patch_size: [ 4, 8 ]  # [ height, width ]
@@ -12,17 +12,17 @@ enc_depth: 12
 dec_num_heads: 12
 dec_mlp_ratio: 4
 dec_depth: 1
-dec_iters: 12
+ref_depth: 1
+ref_mode: 'LM' # LM, MLM, etc.
 head_char_emb_tying: true
-update_content: false
 
 # Training
 lr: 7e-4
-perm_num: 6
-perm_forward: true
-perm_mirrored: true
 dropout: 0.1
+perm_num: 1
+perm_forward: true
+perm_mirrored: false
 
 # Decoding mode (test)
 decode_ar: true
-refine_iters: 1
+ref_iters: 1

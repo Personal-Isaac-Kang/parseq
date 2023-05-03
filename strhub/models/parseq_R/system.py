@@ -38,44 +38,38 @@ DEBUG_LAYER_INDEX = 0
 @dataclass
 class System_Data:
     sa_weights: torch.Tensor = None
-    ca_weights: torch.Tensor = None
-    main_pt_1: torch.Tensor = None
-    main_pt_2: torch.Tensor = None
-    main_pt_3: torch.Tensor = None
-    main_pt_4: torch.Tensor = None
-    main_pt_5: torch.Tensor = None
-    res_pt_1: torch.Tensor = None
-    res_pt_2: torch.Tensor = None
-    res_pt_3: torch.Tensor = None
-    res_pt_4: torch.Tensor = None
     memory: torch.Tensor = None
     content: torch.Tensor = None
 
 
-class PARSeq(CrossEntropySystem):
+class PARSeq_R(CrossEntropySystem):
 
     def __init__(self, charset_train: str, charset_test: str, max_label_length: int,
                  batch_size: int, lr: float, warmup_pct: float, weight_decay: float,
                  img_size: Sequence[int], patch_size: Sequence[int], embed_dim: int,
-                 enc_num_heads: int, enc_mlp_ratio: int, enc_depth: int,
-                 dec_num_heads: int, dec_mlp_ratio: int, dec_depth: int,
                  perm_num: int, perm_forward: bool, perm_mirrored: bool,
-                 decode_ar: bool, refine_iters: int, dropout: float,
-                 head_char_emb_tying: bool, update_content: bool,
+                 enc_num_heads: int, enc_mlp_ratio: int, enc_depth: int,
+                 dec_num_heads: int, dec_mlp_ratio: int, dec_depth: int, ref_depth: int, ref_mode: str,
+                 decode_ar: bool, ref_iters: int, dropout: float,
+                 head_char_emb_tying: bool,
                  debug: bool = False, **kwargs: Any) -> None:
         self.debug = debug
         super().__init__(charset_train, charset_test, batch_size, lr, warmup_pct, weight_decay, self.debug)
-        print('Model : PARSeq')
+        print('Model : PARSeq_R')
         self.save_hyperparameters()
 
         self.max_label_length = max_label_length
         self.decode_ar = decode_ar
-        self.refine_iters = refine_iters
+        self.ref_iters = ref_iters
 
         self.encoder = Encoder(img_size, patch_size, embed_dim=embed_dim, depth=enc_depth, num_heads=enc_num_heads,
                                mlp_ratio=enc_mlp_ratio)
         decoder_layer = DecoderLayer(embed_dim, dec_num_heads, embed_dim * dec_mlp_ratio, dropout)
-        self.decoder = Decoder(decoder_layer, num_layers=dec_depth, norm=nn.LayerNorm(embed_dim), update_content=update_content)
+        self.decoder = Decoder(decoder_layer, num_layers=dec_depth, norm=nn.LayerNorm(embed_dim))
+        
+        refiner_layer = DecoderLayer(embed_dim, dec_num_heads, embed_dim * dec_mlp_ratio, dropout)
+        self.refiner = Decoder(refiner_layer, num_layers=ref_depth, norm=nn.LayerNorm(embed_dim))
+        
 
         # Perm/attn mask stuff
         self.rng = np.random.default_rng()
@@ -124,6 +118,25 @@ class PARSeq(CrossEntropySystem):
         # tgt_mask : content_mask
         # tgt_padding_mask : pad + eos mask of tgt_in
         return self.decoder(tgt_query, tgt_emb, memory, tgt_query_mask, tgt_mask, tgt_padding_mask)
+    
+    def refine(self, tgt: torch.Tensor, memory: torch.Tensor, tgt_mask: Optional[Tensor] = None,
+               tgt_padding_mask: Optional[Tensor] = None, tgt_query: Optional[Tensor] = None,
+               tgt_query_mask: Optional[Tensor] = None):
+        N, L = tgt.shape
+        # <bos> stands for the null context. We only supply position information for characters after <bos>.
+        null_ctx = self.text_embed(tgt[:, :1])
+        tgt_emb = self.pos_queries[:, :L - 1] + self.text_embed(tgt[:, 1:])
+        tgt_emb = self.dropout(torch.cat([null_ctx, tgt_emb], dim=1))
+        if tgt_query is None:
+            tgt_query = self.pos_queries[:, :L].expand(N, -1, -1)
+        tgt_query = self.dropout(tgt_query)
+        # tgt_query : pos
+        # tgt_emb : pos_emb + tok_emb : content
+        # memory : memory
+        # tgt_query_mask : query_mask
+        # tgt_mask : content_mask
+        # tgt_padding_mask : pad + eos mask of tgt_in
+        return self.refiner(tgt_query, tgt_emb, memory, tgt_query_mask, None, tgt_padding_mask)
 
     def forward(self, images: Tensor, max_length: Optional[int] = None, debug: bool = False) -> Tensor:
         if debug:
@@ -144,11 +157,6 @@ class PARSeq(CrossEntropySystem):
         # Special case for the forward permutation. Faster than using `generate_attn_masks()`
         tgt_mask = query_mask = torch.triu(torch.full((num_steps, num_steps), float('-inf'), device=self._device), 1)
 
-        # if debug:
-        #     sa_weights = []
-        #     ca_weights = []
-        #     main_pt_1, main_pt_2, main_pt_3, main_pt_4, res_pt_1, res_pt_2, res_pt_3 = ([] for _ in range(7))
-        
         if self.decode_ar:
             tgt_in = torch.full((bs, num_steps), self.pad_id, dtype=torch.long, device=self._device)
             tgt_in[:, 0] = self.bos_id
@@ -156,18 +164,8 @@ class PARSeq(CrossEntropySystem):
             logits = []
             for i in range(num_steps):
                 j = i + 1  # next token index
-                # Efficient decoding:
-                # Input the context up to the ith token. We use only one query (at position = i) at a time.
-                # This works because of the lookahead masking effect of the canonical (forward) AR context.
-                # Past tokens have no access to future tokens, hence are fixed once computed.
                 tgt_out, _aggs = self.decode(tgt_in[:, :j], memory, tgt_mask[:j, :j], tgt_query=pos_queries[:, i:j],
                                       tgt_query_mask=query_mask[i:j, :j])
-                
-                # if debug:
-                #     _agg = _aggs[DEBUG_LAYER_INDEX]
-                #     sa_weights.append(_agg.sa_weights)
-                #     ca_weights.append(_agg.ca_weights)
-    
                 # the next token probability is in the output's ith token position
                 p_i = self.head(tgt_out)
                 logits.append(p_i)
@@ -184,34 +182,6 @@ class PARSeq(CrossEntropySystem):
             tgt_out, _ = self.decode(tgt_in, memory, tgt_query=pos_queries)
             logits = self.head(tgt_out)
         
-        # if debug:
-        #     if sa_weights[0] is not None:
-        #         sa_weights = [s[0][0] for s in sa_weights]
-        #         sa_weights = pad_sequence(sa_weights).Tsa
-        #     else:
-        #         sa_weights = None
-        #     if ca_weights[0] is not None:
-        #         ca_weights = torch.cat(ca_weights, dim=1) # Shape : 1, L_P, L_V
-        #     else:
-        #         ca_weights = None
-        
-        if self.refine_iters:
-            # For iterative refinement, we always use a 'cloze' mask.
-            # We can derive it from the AR forward mask by unmasking the token context to the right.
-            query_mask[torch.triu(torch.ones(num_steps, num_steps, dtype=torch.bool, device=self._device), 2)] = 0
-            bos = torch.full((bs, 1), self.bos_id, dtype=torch.long, device=self._device)
-            for i in range(self.refine_iters):
-                # Prior context is the previous output.
-                tgt_in = torch.cat([bos, logits[:, :-1].argmax(-1)], dim=1)
-                tgt_padding_mask = ((tgt_in == self.eos_id).cumsum(-1) > 0)  # mask tokens beyond the first EOS token.
-                tgt_out, _ = self.decode(tgt_in, memory, tgt_mask[:tgt_in.shape[1], :tgt_in.shape[1]], tgt_padding_mask,
-                                      tgt_query=pos_queries, tgt_query_mask=query_mask[:, :tgt_in.shape[1]])
-                logits = self.head(tgt_out)
-                
-        # if debug:
-        #     # aggregate inspection data
-        #     agg.sa_weights = sa_weights
-        #     agg.ca_weights = ca_weights
 
         return logits, logits, agg
 
@@ -304,25 +274,33 @@ class PARSeq(CrossEntropySystem):
         tgt_perms = self.gen_tgt_perms(tgt)
         tgt_in = tgt[:, :-1]
         tgt_out = tgt[:, 1:]
-        # The [EOS] token is not depended upon by any other token in any permutation ordering
-        # tgt_padding_mask = (tgt_in == self.pad_id) | (tgt_in == self.eos_id)
         tgt_padding_mask = (tgt_in == self.pad_id)
 
         loss = 0
-        loss_numel = 0
+        loss_dec = 0
+        loss_numel_dec = 0
+        loss_ref = 0
         n = (tgt_out != self.pad_id).sum().item()
         for i, perm in enumerate(tgt_perms):
             tgt_mask, query_mask = self.generate_attn_masks(perm)
             out, _ = self.decode(tgt_in, memory, tgt_mask, tgt_padding_mask, tgt_query_mask=query_mask)
             logits = self.head(out).flatten(end_dim=1)
-            loss += n * F.cross_entropy(logits, tgt_out.flatten(), ignore_index=self.pad_id, label_smoothing=0.3)
-            loss_numel += n
-            # After the second iteration (i.e. done with canonical and reverse orderings),
-            # remove the [EOS] tokens for the succeeding perms
-            # if i == 1:
-            #     tgt_out = torch.where(tgt_out == self.eos_id, self.pad_id, tgt_out)
-            #     n = (tgt_out != self.pad_id).sum().item()
-        loss /= loss_numel
+            loss_dec += n * F.cross_entropy(logits, tgt_out.flatten(), ignore_index=self.pad_id)
+            loss_numel_dec += n
+        loss_dec /= loss_numel_dec
+        
+        bs = images.shape[0]
+        bos = torch.full((bs, 1), self.bos_id, dtype=torch.long, device=self._device)
+        tgt_in = torch.cat([bos, logits[:, :-1].argmax(-1)], dim=1)
+        tgt_padding_mask = ((tgt_in == self.eos_id).cumsum(-1) > 0)
+        tgt_padding_mask = F.pad(tgt_padding_mask, (1, 0), 'constant', self.pad_id)[:, :-1]
+        tgt_mask=None
+        tgt_query_mask=None
+        out, _ = self.refine(tgt_in, memory, tgt_mask, tgt_padding_mask, tgt_query_mask=tgt_query_mask)
+        logits = self.head(out).flatten(end_dim=1)
+        loss_ref = F.cross_entropy(logits, tgt_out.flatten(), ignore_index=self.pad_id)
+        
+        loss = loss_dec + loss_ref
 
         self.log('loss', loss)
         return loss
