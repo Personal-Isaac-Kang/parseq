@@ -198,7 +198,6 @@ class PARSeq_PD(CrossEntropySystem):
                 logits = torch.zeros(bs, S, logits_t.shape[-1], dtype=logits_t.dtype, device=self._device)
             b_ind = torch.arange(bs, device=logits.device).unsqueeze(1)
             logits[b_ind, topk_pos, :] = logits_t[b_ind, topk_ind, :]
-            # import ipdb; ipdb.set_trace(context=11) # #FF0000
             # print_parallel_decoding_process(par_dec, t, lan_ids[0])
         return logits, logits, None
     
