@@ -41,54 +41,43 @@ class System_Data:
     sa_weights_dec: Tensor = None
     sa_weights_ref: Tensor = None
 
-class VLO(CrossEntropySystem):
+class OLV(CrossEntropySystem):
+    # TODO :  Implement PARSeq
 
     def __init__(self, charset_train: str, charset_test: str, max_label_length: int,
                  batch_size: int, lr: float, warmup_pct: float, weight_decay: float,
                  img_size: Sequence[int], patch_size: Sequence[int], embed_dim: int,
                  enc_num_heads: int, enc_mlp_ratio: int, enc_depth: int,
                  dec_num_heads: int, dec_mlp_ratio: int, dec_depth: int, ref_depth: int,
-                 dropout: float, QK: List[List[str]], ref_char_loss_scale: int, ref_rtd_loss_scale: int, ref_iters: int,
-                 dec_sampling_method: str, dec_sampling_temp : float, ref_objective: str,
-                 ref_vis_masking_prob: float,
+                 perm_num: int, perm_forward: bool, perm_mirrored: bool, decode_ar: bool,
+                 dropout: float, ref_iters: int,
                  debug: bool = False, **kwargs: Any) -> None:
-        """
-        Args:
-            QK : Specifies allowed attention. "VV" stands for self-attention of visual embs.
-                "OV" stands for ordinal embs as query and visual embs as key.
-                
-                QK = [query_V_list, query_L_list, query_O_list].
-                query_V_list = [key_V, key_L, key_O]
-                
-                e.g. QK = [['V', 'L'], [], ['O']] means that "VV", "VL', "OO" attention is allowed.
-                
-                Language and ordinal embs are always causal, including self.
-        """
         super().__init__(charset_train, charset_test, batch_size, lr, warmup_pct, weight_decay, debug)
-        print('Model : VLO')
+        print('Model : OLV')
+        self.save_hyperparameters()
+        self.debug = debug
         self.results_dec = []
         self.results_ref = []
-        self.debug = debug
-        self.dec_sampling_method = dec_sampling_method
-        self.dec_sampling_temp = dec_sampling_temp
-        self.ref_vis_masking_prob = ref_vis_masking_prob
+        self.decode_ar = decode_ar
+        
+        # Perm/attn mask stuff
+        self.rng = np.random.default_rng()
+        self.max_gen_perms = perm_num // 2 if perm_mirrored else perm_num
+        self.perm_forward = perm_forward
+        self.perm_mirrored = perm_mirrored
+        
         self.max_label_length = max_label_length
-        self.save_hyperparameters()
 
         # Model
         self.encoder = Encoder(img_size, patch_size, embed_dim=embed_dim, depth=enc_depth, num_heads=enc_num_heads, mlp_ratio=enc_mlp_ratio)
         decoder_layer = DecoderLayer(embed_dim, dec_num_heads, embed_dim * dec_mlp_ratio, dropout)
-        self.decoder = Decoder(decoder_layer, num_layers=dec_depth, norm=nn.LayerNorm(embed_dim))
-        self.refiner = Decoder(decoder_layer, num_layers=ref_depth, norm=nn.LayerNorm(embed_dim)) if ref_depth > 0 else None
+        self.decoder = Decoder(decoder_layer, num_layers=dec_depth, norm=nn.LayerNorm(embed_dim), dropout=dropout)
+        self.refiner = Decoder(decoder_layer, num_layers=ref_depth, norm=nn.LayerNorm(embed_dim), dropout=dropout) if ref_depth > 0 else None
         self.ref_iters = ref_iters
-        
-        # Losses
-        self.ref_char_loss_scale = ref_char_loss_scale
-        self.ref_rtd_loss_scale = ref_rtd_loss_scale
         
         # Character Embeddings / Heads
         self.char_embed_dec = TokenEmbedding(len(self.tokenizer), embed_dim)
-        self.char_embed_ref = GradientDisentangledTokenEmbedding(len(self.tokenizer), embed_dim, self.char_embed_dec)
+        self.char_embed_ref = TokenEmbedding(len(self.tokenizer), embed_dim)
         self.char_head_dec = nn.Linear(embed_dim, len(self.tokenizer))
         self.char_head_dec.weight = self.char_embed_dec.embedding.weight
         self.char_head_ref = nn.Linear(embed_dim, len(self.tokenizer))
@@ -100,7 +89,6 @@ class VLO(CrossEntropySystem):
         self.pos_embed_dec_O = nn.Parameter(torch.Tensor(1, max_label_length + 1, embed_dim)) # +1 for [E]
         self.pos_embed_ref_L = nn.Parameter(torch.Tensor(1, max_label_length + 2, embed_dim))
         self.pos_embed_ref_O = nn.Parameter(torch.Tensor(1, max_label_length + 1, embed_dim))
-        self.dropout = nn.Dropout(p=dropout)
         
         # Modality Embeddings
         self.modal_embed  = nn.Parameter(torch.Tensor(1, 3, embed_dim))
@@ -112,13 +100,6 @@ class VLO(CrossEntropySystem):
         nn.init.trunc_normal_(self.pos_embed_ref_L, std=.02)
         nn.init.trunc_normal_(self.pos_embed_ref_O, std=.02)
         nn.init.trunc_normal_(self.modal_embed, std=.02)
-        
-        # attn_mask
-        am = AttentionMask(max_label_length, QK, self.hparams)
-        self.attn_mask = am.get_attn_mask(img_size, patch_size)
-        self.attn_mask_refine = am.get_attn_mask(img_size, patch_size, refine_layer=True)
-        am.visualize_attn_mask(self.attn_mask)
-        am.visualize_attn_mask(self.attn_mask_refine, refine_layer=True)
         
     @torch.jit.ignore
     def no_weight_decay(self):
@@ -134,70 +115,65 @@ class VLO(CrossEntropySystem):
         enc_param_names = {'encoder.' + n for n in self.encoder.no_weight_decay()}
         return param_names.union(enc_param_names)
     
-    def encode(self, img: torch.Tensor):
-        return self.encoder(img)
+    def encode(self, img: Tensor):
+        """
+        Encodes image into a sequence of visual embeddings.
+        """
+        V = self.encoder(img)
+        V = V + self.modal_embed[:, 0]
+        return V
     
-    def to_lan(self, tgt_in, module):
-        """Converts tensor of language token ids to character embeddings."""
-        bs, L_L = tgt_in.shape
+    def to_L(self, L_ids, module):
+        """
+        Converts tensor of language token ids to character embeddings.
+        
+        Args:
+            L_ids (Tensor): [N, L_L] tensor of language token ids. Starts with [B] token.
+        
+        Returns:
+            L (Tensor): [N, L_L, E] tensor of character embeddings.
+        """
+        bs, L_L = L_ids.shape
         if module == 'decoder':
-            null_ctx = self.char_embed_dec(tgt_in[:, :1]) # tgt_in stats with [B]. No positional encoding added to [B]
-            lan = torch.cat([null_ctx, self.char_embed_dec(tgt_in[:, 1:]) + self.pos_embed_dec_L[:, :L_L - 1]], dim=1)
-            lan = lan +  self.modal_embed[:, 1]
+            null_ctx = self.char_embed_dec(L_ids[:, :1])
+            L = torch.cat([null_ctx, self.char_embed_dec(L_ids[:, 1:]) + self.pos_embed_dec_L[:, :L_L - 1]], dim=1)
+            L = L +  self.modal_embed[:, 1]
         elif module == 'refiner':
-            null_ctx = self.char_embed_ref(tgt_in[:, :1]) # tgt_in stats with [B]. No positional encoding added to [B]
-            lan = torch.cat([null_ctx, self.char_embed_ref(tgt_in[:, 1:]) + self.pos_embed_dec_L[:, :L_L - 1]], dim=1)
-            lan = lan + self.modal_embed[:, 1]
+            null_ctx = self.char_embed_ref(L_ids[:, :1])
+            L = torch.cat([null_ctx, self.char_embed_ref(L_ids[:, 1:]) + self.pos_embed_dec_L[:, :L_L - 1]], dim=1)
+            L = L + self.modal_embed[:, 1]
         else:
             raise Exception()
-            
-        return lan
-
-    def decode(self, vis:torch.Tensor, lan:torch.Tensor,  pos:torch.Tensor,
-               attn_mask:torch.Tensor, padding_mask:Optional[Tensor]=None, debug=False):
-        """
-        Used in forward-pass of train.
-        Run Decoder.
-        
-        Args:
-            vis : Visual embs. Shape: N, L_V, D
-            lan : Language embs. Shape: N, L_L, D
-            pos : Ordinal embs. Shape: N, L_O, D
-        """
-        lan = self.dropout(lan)
-        pos = self.dropout(pos)
-        return self.decoder(vis, lan, pos, attn_mask=attn_mask, padding_mask=padding_mask, debug=debug)
+        return L
     
-    def refine(self, vis:torch.Tensor, lan:torch.Tensor,  pos:torch.Tensor,
-               attn_mask:torch.Tensor, padding_mask:Optional[Tensor]=None, debug=False):
+    def get_O(self, L_O, bs, module):
         """
-        Used in forward-pass of train.
-        Further refines initial decoder prediction.
-        Stop gradient is applied to language and positional embs,
-        to prevent information leak from future steps.
-        
-        Args:
-            vis : Visual embs. Shape: N, L_V, D
-            lan : Language embs. Shape: N, L_L, D
-            pos : Ordinal embs. Shape: N, L_O, D
+        Gets Ordinal embeddings.
         """
-        lan = self.dropout(lan)
-        pos = self.dropout(pos)
-        # vis is 
-        return self.refiner(vis.detach(), lan.detach(), pos.detach(), attn_mask=attn_mask, padding_mask=padding_mask, debug=debug)
- 
-    def forward(self, images:Tensor, validation: bool = False, debug: bool = False, DEC_IDX=0, REF_IDX=0) -> Tensor:
+        if module == 'decoder':
+            O = self.pos_embed_dec_O[:, :L_O].expand(bs, -1, -1)
+        elif module == 'refiner':
+            O = self.pos_embed_ref_O[:, :L_O].expand(bs, -1, -1)
+        else:
+            raise Exception()
+        O = O + self.modal_embed[:, 2]
+        return O
+
+    def forward(self, images: Tensor, validation: bool = False, debug: bool = False, DEC_IDX: int = 0, REF_IDX: int = 0) -> Tensor:
         """
         Forward-pass for test & val.
-        Used implicitly in forward-pass of val.
         
         Args:
-            images : input image
-            return_intermediate_logits : In case of decoder-refiner structure, also return decoder logits.
-            validation : Is validation step.
-            debug : Is debug mode.
-            DEC_IDX : Debugging target decoder index.
-            REF_IDX : Debugging target refiner index.
+            images (Tensor): input image
+            validation (bool): Is validation step.
+            debug: Is debug mode.
+            DEC_IDX: Target debugging decoder index.
+            REF_IDX: Target debugging refiner index.
+            
+        Returns:
+            logits : Tensor of logits.
+                     Shape [N, L_O, C] in case of validation,
+                     Shape [N, <=L_O, C] in case of test.
         """
         if debug :
             agg_system = System_Data()
@@ -206,37 +182,44 @@ class VLO(CrossEntropySystem):
         
         testing = not validation
         bs = images.shape[0]
-        L_L = self.max_label_length + 2 # +2 for [B], [E]
+        L_L = self.max_label_length + 1 # +1 for [B]
         L_O = num_steps = self.max_label_length + 1 # +1 for [E]
         
         #@ decoder
         #* prepare embs
-        vis = self.encode(images)
-        vis = vis + self.modal_embed[:, 0]
-        L_V = vis.shape[1]
-        lan_ids = torch.full((bs, L_L), self.pad_id, dtype=torch.long, device=self._device)
-        lan_ids[:, 0] = self.bos_id
-        ord_dec_in = self.pos_embed_dec_O[:, :L_O].expand(bs, -1, -1)
-        ord_dec_in = ord_dec_in + self.modal_embed[:, 2]
+        
+        V = self.encode(images)
+        L_V = V.shape[1]
+        
+        # Initialize L_ids
+        L_ids = torch.full((bs, L_L), self.pad_id, dtype=torch.long, device=self._device)
+        L_ids[:, 0] = self.bos_id
+        
+        O_dec_in = self.get_O(L_O, bs, 'decoder')
+        
+        perms = self.gen_perms(L_ids)
+        
+        
         attn_mask = self.attn_mask.to(self._device)
+        import ipdb; ipdb.set_trace(context=11) # #FF0000
         #* decoding
         logits_dec = []
         agg_dec_ts = []
         for i in range(num_steps):
             j = i + 1 # next token index
-            lan_dec_in = self.to_lan(lan_ids, 'decoder')
+            L_dec_in = self.to_L(L_ids, 'decoder')
             select_indices = torch.arange(L_V).tolist() + (L_V + torch.arange(j)).tolist() + [L_V + L_L + i]
             attn_mask_t = attn_mask[select_indices][:, select_indices]
-            vis_dec_out, lan_dec_out, ord_dec_out, agg_dec_t = self.decode(vis, lan_dec_in[:, :j], ord_dec_in[:, i:j], attn_mask=attn_mask_t, debug=debug)
+            V_dec_out, L_dec_out, O_dec_out, agg_dec_t = self.decoder(V, L_dec_in[:, :j], O_dec_in[:, i:j], attn_mask_t, debug=debug)
             agg_dec_ts.append(agg_dec_t)
-            logits_dec_i = self.char_head_dec(ord_dec_out)
+            logits_dec_i = self.char_head_dec(O_dec_out)
             logits_dec.append(logits_dec_i)
             max_time_step = i
             if j < num_steps:
                 # greedy decode. add the next token index to the target input
-                lan_ids[:, j] = logits_dec_i.squeeze().argmax(-1)
+                L_ids[:, j] = logits_dec_i.squeeze().argmax(-1)
                 # Efficient batch decoding: If all output words have at least one EOS token, end decoding.
-                if testing and (lan_ids == self.eos_id).any(dim=-1).all():
+                if testing and (L_ids == self.eos_id).any(dim=-1).all():
                     break
         logits_dec = torch.cat(logits_dec, dim=1)
         logits = logits_dec
@@ -255,10 +238,10 @@ class VLO(CrossEntropySystem):
             ids_sampled = self.tokenizer.sample(logits_dec, greedy=True, temp=1.0, pad_to_max_length=False, device=self._device)
             #* prepare embs
             L_S_L = ids_sampled.shape[1]
-            lan_ref_in = self.to_lan(ids_sampled, 'refiner')
+            L_ref_in = self.to_L(ids_sampled, 'refiner')
             L_S_O = min(ids_sampled.shape[1] + 5, self.max_label_length + 1)
-            ord_ref_in = self.pos_embed_ref_O[:, :L_S_O].expand(bs, -1, -1)
-            ord_ref_in = ord_ref_in + self.modal_embed[:, 2]
+            O_ref_in = self.pos_embed_ref_O[:, :L_S_O].expand(bs, -1, -1)
+            O_ref_in = O_ref_in + self.modal_embed[:, 2]
             #* padding mask
             padding_mask_L = (ids_sampled == self.pad_id)
             padding_mask_VLO = F.pad(padding_mask_L, (L_V, L_S_O + 1), "constant", 0)
@@ -268,8 +251,8 @@ class VLO(CrossEntropySystem):
                 +  (L_V +  L_L + torch.arange(L_S_O)).tolist()
             attn_mask_refine_t = attn_mask_refine[select_indices][:, select_indices]
             #* refine
-            vis_ref_out, lan_ref_out, ord_ref_out, agg_ref = self.refine(vis, lan_ref_in, ord_ref_in, attn_mask_refine_t, padding_mask_VLO, debug=debug)
-            logits_ref = self.char_head_ref(ord_ref_out)
+            V_ref_out, L_ref_out, O_ref_out, agg_ref = self.refine(V, L_ref_in, O_ref_in, attn_mask_refine_t, padding_mask_VLO, debug=debug)
+            logits_ref = self.char_head_ref(O_ref_out)
             logits = logits_ref
             
             if debug:
@@ -299,6 +282,72 @@ class VLO(CrossEntropySystem):
         loss_numel = 1
         return logits, loss, logits_inter, loss_inter, loss_numel
 
+    def gen_perms(self, L_ids):
+        """
+        Generate shared permutations for the whole batch.
+        This works because the same attention mask can be used for the shorter sequences
+        because of the padding mask.
+        
+        Args:
+            L_ids: (bs, L) tensor of label ids. [B] and [E] are included.
+        """
+        # We don't permute the position of BOS, we permute EOS separately
+        max_num_chars = L_ids.shape[1] - 2
+        # Special handling for 1-character sequences
+        max_num_chars = 3
+        # if max_num_chars == 1:
+        #     return torch.arange(3, device=self._device).unsqueeze(0)
+        perms = [torch.arange(max_num_chars, device=self._device)] if self.perm_forward else []
+        # Additional permutations if needed
+        max_perms = math.factorial(max_num_chars)
+        if self.perm_mirrored:
+            max_perms //= 2
+        num_gen_perms = min(self.max_gen_perms, max_perms)
+        perms.extend([torch.randperm(max_num_chars, device=self._device) for _ in range(num_gen_perms - len(perms))])
+        perms = torch.stack(perms)
+        import ipdb; ipdb.set_trace(context=11) # #FF0000
+        if self.perm_mirrored:
+            # Add complementary pairs
+            comp = perms.flip(-1)
+            # Stack in such a way that the pairs are next to each other.
+            perms = torch.stack([perms, comp]).transpose(0, 1).reshape(-1, max_num_chars)
+        # NOTE:
+        # The only meaningful way of permuting the EOS position is by moving it one character position at a time.
+        # However, since the number of permutations = T! and number of EOS positions = T + 1, the number of possible EOS
+        # positions will always be much less than the number of permutations (unless a low perm_num is set).
+        # Thus, it would be simpler to just train EOS using the full and null contexts rather than trying to evenly
+        # distribute it across the chosen number of permutations.
+        # Add position indices of BOS and EOS
+        bos_idx = perms.new_zeros((len(perms), 1))
+        eos_idx = perms.new_full((len(perms), 1), max_num_chars + 1)
+        perms = torch.cat([bos_idx, perms + 1, eos_idx], dim=1)
+        # Special handling for the reverse direction. This does two things:
+        # 1. Reverse context for the characters
+        # 2. Null context for [EOS] (required for learning to predict [EOS] in NAR mode)
+        if len(perms) > 1:
+            perms[1, 1:] = max_num_chars + 1 - torch.arange(max_num_chars + 1, device=self._device)
+        return perms
+
+    def generate_attn_masks(self, perm):
+        """Generate attention masks given a sequence permutation (includes pos. for bos and eos tokens)
+        :param perm: the permutation sequence. i = 0 is always the BOS
+        :return: lookahead attention masks
+        """
+        sz = perm.shape[0]
+        mask = torch.zeros((sz, sz), device=self._device)
+        for i in range(sz):
+            query_idx = perm[i]
+            masked_keys = perm[i + 1:]
+            mask[query_idx, masked_keys] = float('-inf')
+        # content_mask : Used in content -> content attention.
+        # query starts from [B], ends with char_last. key starts from [B], ends with char_last.
+        content_mask = mask[:-1, :-1].clone()
+        mask[torch.eye(sz, dtype=torch.bool, device=self._device)] = float('-inf')  # mask "self"
+        # query mask : Used in content -> pos attention.
+        # query starts from char_first, ends with [E]. key starts from [B], ends with char_last.c
+        query_mask = mask[1:, :-1]
+        return content_mask, query_mask
+    
     def training_step(self, batch, batch_idx) -> STEP_OUTPUT:
         # handle hydra x pytorch lightning bug
         if os.path.exists('./config'):
@@ -310,33 +359,33 @@ class VLO(CrossEntropySystem):
         images, labels = batch
         bs = images.shape[0]
         
-        #* vis embs
-        vis = self.encode(images)
-        vis = vis + self.modal_embed[:, 0]
-        L_V = vis.shape[1]
+        #* V embs
+        V = self.encode(images)
+        V = V + self.modal_embed[:, 0]
+        L_V = V.shape[1]
         #@ decoding stage.
-        #* lan embs
+        #* L embs
         ids = self.tokenizer.encode(labels, self._device)
         L_L = self.max_label_length + 2 # +2 for [B], [E]
         L_O = self.max_label_length + 1 # +1 for [E]
         tgt_in = ids[:, :-1]
         tgt_out = ids[:, 1:]
-        lan_dec_in = self.to_lan(tgt_in, 'decoder')
-        #* ord embs
-        ord_dec_in = self.pos_embed_dec_O[:, :L_O].expand(bs, -1, -1)
-        ord_dec_in = ord_dec_in + self.modal_embed[:, 2]
-        ord_dec_in = ord_dec_in[:, :tgt_out.shape[1]]
+        L_dec_in = self.to_L(tgt_in, 'decoder')
+        #* O embs
+        O_dec_in = self.pos_embed_dec_O[:, :L_O].expand(bs, -1, -1)
+        O_dec_in = O_dec_in + self.modal_embed[:, 2]
+        O_dec_in = O_dec_in[:, :tgt_out.shape[1]]
         #* padding mask
         padding_mask = (tgt_in == self.pad_id)
-        padding_mask = F.pad(padding_mask, (L_V, ord_dec_in.shape[1]), "constant", 0)
+        padding_mask = F.pad(padding_mask, (L_V, O_dec_in.shape[1]), "constant", 0)
         #* attention mask
         attn_mask = self.attn_mask.to(self._device)
         select_indices = torch.arange(L_V).tolist() + (L_V + torch.arange(tgt_in.shape[1])).tolist()\
             + (L_V + L_L + torch.arange(tgt_out.shape[1])).tolist()
         attn_mask_t = attn_mask[select_indices][:, select_indices]
         #* decoding
-        vis_dec_out, lan_dec_out, ord_dec_out, agg_dec = self.decode(vis, lan_dec_in, ord_dec_in, attn_mask_t, padding_mask)
-        logits_dec = self.char_head_dec(ord_dec_out)
+        V_dec_out, L_dec_out, O_dec_out, agg_dec = self.decoder(V, L_dec_in, O_dec_in, attn_mask_t, padding_mask)
+        logits_dec = self.char_head_dec(O_dec_out)
         loss_dec = nn.CrossEntropyLoss(ignore_index=self.pad_id)(logits_dec.moveaxis(-1, 1), tgt_out)
         probs_dec = logits_dec.softmax(-1)
         preds_dec, probs_dec_trunc = self.tokenizer.decode(probs_dec)
@@ -361,14 +410,14 @@ class VLO(CrossEntropySystem):
             assert ids.shape[1] == L_S_L and ids_sampled.shape[1] == L_S_L
             L_S_O = L_S_L - 1
             #* prepare embs
-            lan_ref_in = self.to_lan(ids_sampled, 'refiner')
-            ord_ref_in = self.pos_embed_ref_O[:, :L_S_O].expand(bs, -1, -1)
-            ord_ref_in = ord_ref_in + self.modal_embed[:, 2]
+            L_ref_in = self.to_L(ids_sampled, 'refiner')
+            O_ref_in = self.pos_embed_ref_O[:, :L_S_O].expand(bs, -1, -1)
+            O_ref_in = O_ref_in + self.modal_embed[:, 2]
             #* padding mask
             padding_mask_L = (ids_sampled == self.pad_id)
             padding_mask_VLO = F.pad(padding_mask_L, (L_V, L_S_O), "constant", 0)
             #- mask visual embs with probability
-            if torch.rand(1).item() < self.ref_vis_masking_prob:
+            if torch.rand(1).item() < self.ref_V_masking_prob:
                 padding_mask_VLO[:, :L_V] = 1
             #* attention mask
             attn_mask_refine = self.attn_mask_refine.to(self._device)
@@ -376,14 +425,14 @@ class VLO(CrossEntropySystem):
                 + (L_V + L_L + torch.arange(L_S_O)).tolist()
             attn_mask_refine_t = attn_mask_refine[select_indices][:, select_indices]
             #* refiner
-            vis_ref_out, lan_ref_out, ord_ref_out, agg_ref = self.refine(vis, lan_ref_in, ord_ref_in, attn_mask_refine_t, padding_mask_VLO)
+            V_ref_out, L_ref_out, O_ref_out, agg_ref = self.refine(V, L_ref_in, O_ref_in, attn_mask_refine_t, padding_mask_VLO)
             #- loss
             #* Language Modeling
-            logits_ref_char = self.char_head_ref(ord_ref_out)
+            logits_ref_char = self.char_head_ref(O_ref_out)
             tgt_out = ids[:, 1:]
             loss_ref_char = nn.CrossEntropyLoss(ignore_index=self.pad_id)(logits_ref_char.moveaxis(-1, 1), tgt_out)
             #* Replaced Token Detection
-            logits_ref_rtd = self.rtd_head_ref(ord_ref_out)
+            logits_ref_rtd = self.rtd_head_ref(O_ref_out)
             rtd_tgt = (ids_sampled[:, 1:] == tgt_out).float()
             loss_ref_rtd = nn.BCEWithLogitsLoss()(logits_ref_rtd.squeeze().float(), rtd_tgt)
             #* refiner loss

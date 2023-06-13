@@ -13,15 +13,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import os
 from pathlib import Path
 
-from omegaconf import DictConfig, open_dict
 import hydra
 from hydra.core.hydra_config import HydraConfig
-
+from omegaconf import DictConfig, open_dict
 from pytorch_lightning import Trainer
-from pytorch_lightning.callbacks import ModelCheckpoint, StochasticWeightAveraging, LearningRateMonitor
+from pytorch_lightning.callbacks import (LearningRateMonitor, ModelCheckpoint,
+                                         StochasticWeightAveraging)
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.strategies import DDPStrategy
 from pytorch_lightning.utilities.model_summary import summarize
@@ -32,11 +32,10 @@ from strhub.models.base import BaseSystem
 
 @hydra.main(config_path='configs', config_name='main', version_base='1.2')
 def main(config: DictConfig):
+    # config
     trainer_strategy = None
     with open_dict(config):
-        # Resolve absolute path to data.root_dir
-        config.data.root_dir = hydra.utils.to_absolute_path(config.data.root_dir)
-        # Special handling for GPU-affected config
+        config.data.root_dir = os.path.abspath(config.data.root_dir)
         gpus = config.trainer.get('gpus', 0)
         if isinstance(gpus, int):
             num_gpus = gpus
@@ -45,7 +44,6 @@ def main(config: DictConfig):
         if num_gpus > 1:
             config.trainer.strategy = 'ddp'
             trainer_strategy = DDPStrategy(find_unused_parameters=False, gradient_as_bucket_view=True)
-            # Scale steps-based config
             config.trainer.val_check_interval //= num_gpus
             if config.trainer.get('max_steps', -1) > 0:
                 config.trainer.max_steps //= num_gpus
@@ -55,12 +53,15 @@ def main(config: DictConfig):
             config.model.perm_mirrored = False
             config.model.refine_iters = 0
     
+    # model
     model: BaseSystem = hydra.utils.instantiate(config.model)
     print(model.hparams)
     print(summarize(model, max_depth=1))
 
+    # data
     datamodule: SceneTextDataModule = hydra.utils.instantiate(config.data)
 
+    # trainer
     checkpoint = ModelCheckpoint(monitor='val_accuracy', mode='max', save_top_k=3, save_last=True,
                                  filename='{epoch}-{step}-{val_accuracy:.4f}')
     swa = StochasticWeightAveraging(swa_epoch_start=0.75)

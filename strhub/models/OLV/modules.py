@@ -68,24 +68,45 @@ class Encoder(VisionTransformer):
     
 
 class Decoder(nn.Module):
+    
     __constants__ = ['norm']
 
-    def __init__(self, decoder_layer, num_layers, norm):
+    def __init__(self, decoder_layer, num_layers, norm, dropout=0):
         super().__init__()
         self.layers = transformer._get_clones(decoder_layer, num_layers)
         self.num_layers = num_layers
         self.norm = norm
+        self.dropout = nn.Dropout(p=dropout)
 
-    def forward(self, vis, lan, pos, attn_mask:Optional[Tensor]=None, padding_mask:Optional[Tensor]=None, debug=False):
+    def forward(self, V, L, O, attn_mask:Optional[Tensor]=None, padding_mask:Optional[Tensor]=None, debug=False):
+        """
+        Forward-pass of Decoder.
+        
+        Args:
+            V (Tensor): [N, L_V, E] Visual embs.
+            L (Tensor): [N, L_L, E] Language embs.
+            O (Tensor): [N, L_O, E] Ordinal embs.
+            
+        Returns:
+            V (Tensor): [N, L_V, E] Visual embs.
+            L (Tensor): [N, L_L, E] Language embs.
+            O (Tensor): [N, L_O, E] Ordinal embs.
+            aggs (list): List of aggregated debugging data.
+        """
         aggs = []
+        
+        L = self.dropout(L)
+        O = self.dropout(O)
+        
         for i, dec_layer in enumerate(self.layers):
-            vis, lan, pos, agg = dec_layer(vis, lan, pos, attn_mask, padding_mask, debug=debug)
+            V, L, O, agg = dec_layer(V, L, O, attn_mask, padding_mask, debug=debug)
             aggs.append(agg)
             
-        vis = self.norm(vis)
-        lan = self.norm(lan)
-        pos = self.norm(pos)
-        return vis, lan, pos, aggs
+        V = self.norm(V)
+        L = self.norm(L)
+        O = self.norm(O)
+        
+        return V, L, O, aggs
     
 
 class DecoderLayer(nn.Module):
